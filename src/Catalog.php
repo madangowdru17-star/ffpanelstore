@@ -98,6 +98,7 @@ final class Catalog
                 'category' => (string) ($product['category'] ?? 'Digital access'),
                 'durations' => array_values($product['durations']),
                 'prices' => $product['prices'],
+                'usd_prices' => $product['usd_prices'],
                 'features' => $product['features'],
                 'demo_url' => $product['demo_enabled'] ? (string) $product['demo_url'] : '',
                 'image_url' => '/api/store/images/' . rawurlencode($key),

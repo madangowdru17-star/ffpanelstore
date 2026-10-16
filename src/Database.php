@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS store_accounts (
     password_salt TEXT NOT NULL DEFAULT '',
     display_name TEXT NOT NULL DEFAULT '',
     disabled INTEGER NOT NULL DEFAULT 0,
+    balance_inr REAL NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     last_login_at INTEGER NOT NULL DEFAULT 0
 );
@@ -75,6 +76,7 @@ CREATE TABLE IF NOT EXISTS store_checkouts (
     amount_inr REAL NOT NULL,
     provider_order_id TEXT NOT NULL DEFAULT '',
     payment_url TEXT NOT NULL DEFAULT '',
+    idempotency_key TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'pending',
     transaction_id TEXT NOT NULL DEFAULT '',
     delivery_key TEXT NOT NULL DEFAULT '',
@@ -109,7 +111,55 @@ CREATE TABLE IF NOT EXISTS store_auth_attempts (
     hits INTEGER NOT NULL,
     window_start INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS store_wallet_topups (
+    order_id TEXT PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    amount_inr REAL NOT NULL,
+    provider_order_id TEXT NOT NULL DEFAULT '',
+    payment_url TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    transaction_id TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(account_id) REFERENCES store_accounts(id)
+);
+CREATE INDEX IF NOT EXISTS idx_store_wallet_topups_account ON store_wallet_topups(account_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS store_wallet_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    amount_inr REAL NOT NULL,
+    balance_after REAL NOT NULL,
+    reference_id TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(account_id) REFERENCES store_accounts(id)
+);
+CREATE INDEX IF NOT EXISTS idx_store_wallet_transactions_account ON store_wallet_transactions(account_id, id DESC);
 SQL);
+        $columns = self::rows('PRAGMA table_info(store_accounts)');
+        $hasBalance = false;
+        foreach ($columns as $column) {
+            if (($column['name'] ?? '') === 'balance_inr') {
+                $hasBalance = true;
+                break;
+            }
+        }
+        if (!$hasBalance) {
+            self::pdo()->exec('ALTER TABLE store_accounts ADD COLUMN balance_inr REAL NOT NULL DEFAULT 0');
+        }
+        $checkoutColumns = self::rows('PRAGMA table_info(store_checkouts)');
+        $hasIdempotencyKey = false;
+        foreach ($checkoutColumns as $column) {
+            if (($column['name'] ?? '') === 'idempotency_key') {
+                $hasIdempotencyKey = true;
+                break;
+            }
+        }
+        if (!$hasIdempotencyKey) {
+            self::pdo()->exec("ALTER TABLE store_checkouts ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''");
+        }
+        self::pdo()->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_store_checkout_idempotency ON store_checkouts(account_id,idempotency_key) WHERE idempotency_key != ''");
     }
 
     public static function rows(string $sql, array $params = []): array

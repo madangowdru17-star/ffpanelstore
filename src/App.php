@@ -29,23 +29,23 @@ final class App
             return;
         }
         if ($method === 'GET' && ($path === '/' || $path === '/index.php')) {
-            self::page('storefront.html');
+            self::page('storefront.php');
             return;
         }
         if ($method === 'GET' && in_array($path, ['/admin', '/admin/'], true)) {
-            self::page('admin_login.html');
+            self::page('admin_login.php');
             return;
         }
         if ($method === 'GET' && $path === '/admin/catalog') {
-            self::page('catalog_admin.html');
+            self::page('catalog_admin.php');
             return;
         }
         if ($method === 'GET' && $path === '/admin/customers') {
-            self::page('admin_customers.html');
+            self::page('admin_customers.php');
             return;
         }
         if ($method === 'GET' && $path === '/api/store/config') {
-            self::json(['shop_name' => 'HEX CHEATS SHOP', 'currency' => 'INR']);
+            self::json(['shop_name' => 'HEX CHEATS SHOP', 'currency' => 'INR', 'display_currencies' => ['INR', 'USD'], 'settlement_currency' => 'INR']);
             return;
         }
         if ($method === 'GET' && $path === '/api/store/products') {
@@ -59,6 +59,54 @@ final class App
         if ($method === 'GET' && $path === '/api/store/session') {
             $account = Auth::current();
             self::json($account ? ['authenticated' => true, 'account' => Auth::publicAccount($account), 'csrf_token' => $account['csrf_token']] : ['authenticated' => false]);
+            return;
+        }
+        if (in_array($method, ['GET', 'PUT'], true) && $path === '/api/store/profile') {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in to view your profile.', 401);
+            }
+            if ($method === 'PUT') {
+                self::json(Auth::updateProfile($account, self::body()));
+            } else {
+                self::json(['account' => Auth::publicAccount($account)]);
+            }
+            return;
+        }
+        if ($method === 'GET' && $path === '/api/store/wallet') {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in to view your wallet.', 401);
+            }
+            self::json(Wallet::snapshot((int) $account['id']));
+            return;
+        }
+        if ($method === 'POST' && $path === '/api/store/wallet/topups') {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in to top up your wallet.', 401);
+            }
+            Auth::requireCsrf($account);
+            self::json(Wallet::createTopup((int) $account['id'], self::body()), 201);
+            return;
+        }
+        if ($method === 'GET' && preg_match('#^/api/store/wallet/topups/([A-Za-z0-9_-]{4,80})/qr$#', $path, $match)) {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in required.', 401);
+            }
+            $image = Wallet::topupQr((int) $account['id'], $match[1]);
+            header('Content-Type: ' . $image['content_type']);
+            header('Cache-Control: no-store');
+            echo $image['body'];
+            return;
+        }
+        if ($method === 'GET' && preg_match('#^/api/store/wallet/topups/([A-Za-z0-9_-]{4,80})$#', $path, $match)) {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in required.', 401);
+            }
+            self::json(Wallet::topupStatus((int) $account['id'], $match[1]));
             return;
         }
         if ($method === 'POST' && $path === '/api/store/register') {
@@ -75,6 +123,10 @@ final class App
         }
         if ($method === 'POST' && $path === '/api/store/checkout') {
             self::checkout();
+            return;
+        }
+        if ($method === 'POST' && $path === '/api/store/checkout/wallet') {
+            self::checkoutFromWallet();
             return;
         }
         if ($method === 'GET' && preg_match('#^/api/store/checkouts/([A-Za-z0-9_-]{4,80})$#', $path, $match)) {
@@ -162,7 +214,7 @@ final class App
         }
         header('Content-Type: text/html; charset=utf-8');
         header('Cache-Control: no-cache, no-store, must-revalidate');
-        readfile($file);
+        require $file;
     }
 
     private static function body(): array
@@ -292,6 +344,100 @@ final class App
         ], 201);
     }
 
+    private static function checkoutFromWallet(): void
+    {
+        $account = Auth::current();
+        if (!$account) {
+            throw new HttpError('Sign in to use your wallet.', 401);
+        }
+        Auth::requireCsrf($account);
+        $body = self::body();
+        $key = strtolower(trim((string) ($body['product_key'] ?? '')));
+        $duration = trim((string) ($body['duration'] ?? ''));
+        $idempotencyKey = trim((string) ($body['idempotency_key'] ?? ''));
+        if (!preg_match('/^[a-z0-9_-]{2,60}$/', $key)) {
+            throw new HttpError('Choose a valid product.', 400);
+        }
+        if (!preg_match('/^[A-Za-z0-9_-]{16,64}$/', $idempotencyKey)) {
+            throw new HttpError('Checkout session expired. Please start the purchase again.', 400);
+        }
+        $product = Catalog::effective($key);
+        if (empty($product['enabled']) || !empty($product['maintenance'])) {
+            throw new HttpError('This product is currently unavailable.', 409);
+        }
+        if (!in_array($duration, $product['durations'] ?? [], true)) {
+            throw new HttpError('Choose a valid product duration.', 400);
+        }
+        $amount = self::price((string) ($product['prices'][$duration] ?? ''));
+        if ($amount === null) {
+            throw new HttpError('The selected INR price is not configured.', 409);
+        }
+        $stock = $product['stock'][$duration] ?? null;
+        if ($stock !== null && is_numeric(str_replace(',', '', (string) $stock)) && (float) str_replace(',', '', (string) $stock) <= 0) {
+            throw new HttpError('This option is currently out of stock.', 409);
+        }
+        $orderId = 'BAL' . strtoupper(bin2hex(random_bytes(8)));
+        $now = time();
+        $apiDuration = (string) ($product['api_duration'][$duration] ?? $duration);
+        $pdo = Database::pdo();
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $existing = Database::row('SELECT * FROM store_checkouts WHERE account_id=? AND idempotency_key=?', [(int) $account['id'], $idempotencyKey]);
+            if ($existing) {
+                $pdo->exec('COMMIT');
+                $outcome = self::deliverCheckout($existing, (string) ($existing['transaction_id'] ?: 'WALLET'));
+                $snapshot = Wallet::snapshot((int) $account['id']);
+                self::json([
+                    'ok' => true, 'order_id' => (string) $existing['order_id'], 'product_name' => (string) $existing['product_name'],
+                    'duration' => (string) $existing['duration'], 'amount_inr' => (float) $existing['amount_inr'],
+                    'status' => (string) ($outcome['status'] ?? $existing['status']), 'delivery_key' => (string) ($outcome['key'] ?? ''),
+                    'balance_inr' => $snapshot['balance_inr'],
+                ], 200);
+                return;
+            }
+            $fresh = Database::row('SELECT balance_inr FROM store_accounts WHERE id=? AND disabled=0', [(int) $account['id']]);
+            if (!$fresh) {
+                throw new HttpError('Account not found or disabled.', 403);
+            }
+            if ((float) $fresh['balance_inr'] + 0.00001 < $amount) {
+                throw new HttpError('Your wallet balance is too low. Add funds or choose online payment.', 409);
+            }
+            $update = $pdo->prepare('UPDATE store_accounts SET balance_inr=balance_inr-? WHERE id=? AND balance_inr>=?');
+            $update->execute([$amount, (int) $account['id'], $amount]);
+            if ($update->rowCount() !== 1) {
+                throw new HttpError('Your wallet balance changed. Refresh and try again.', 409);
+            }
+            $pdo->prepare(
+                'INSERT INTO store_checkouts(order_id,account_id,product_key,product_id,product_name,duration,api_duration,amount_inr,provider_order_id,payment_url,idempotency_key,status,transaction_id,created_at,updated_at) '
+                . 'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+            )->execute([
+                $orderId, (int) $account['id'], $key, (string) ($product['id'] ?? ''), (string) ($product['name'] ?? $key),
+                $duration, $apiDuration, $amount, '', '', $idempotencyKey, 'wallet_paid', 'WALLET', $now, $now,
+            ]);
+            $balance = Database::row('SELECT balance_inr FROM store_accounts WHERE id=?', [(int) $account['id']]);
+            $pdo->prepare(
+                'INSERT INTO store_wallet_transactions(account_id,kind,amount_inr,balance_after,reference_id,description,created_at) VALUES(?,?,?,?,?,?,?)'
+            )->execute([
+                (int) $account['id'], 'debit', -$amount, (float) ($balance['balance_inr'] ?? 0),
+                'PURCHASE:' . $orderId, 'Wallet purchase: ' . (string) ($product['name'] ?? $key), $now,
+            ]);
+            $pdo->exec('COMMIT');
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
+            }
+            throw $e;
+        }
+        $order = Database::row('SELECT * FROM store_checkouts WHERE order_id=?', [$orderId]);
+        $outcome = self::deliverCheckout($order ?? [], 'WALLET');
+        $snapshot = Wallet::snapshot((int) $account['id']);
+        self::json([
+            'ok' => true, 'order_id' => $orderId, 'product_name' => (string) ($product['name'] ?? $key),
+            'duration' => $duration, 'amount_inr' => $amount, 'status' => (string) ($outcome['status'] ?? 'pending'),
+            'delivery_key' => (string) ($outcome['key'] ?? ''), 'balance_inr' => $snapshot['balance_inr'],
+        ], 201);
+    }
+
     private static function checkoutStatus(string $orderId): void
     {
         $account = Auth::current();
@@ -302,7 +448,11 @@ final class App
         if (!$row) {
             throw new HttpError('Order not found.', 404);
         }
-        if ($row['status'] === 'pending') {
+        if ($row['status'] === 'wallet_paid') {
+            $outcome = self::deliverCheckout($row, (string) $row['transaction_id']);
+            $row['status'] = $outcome['status'];
+            $row['delivery_key'] = $outcome['key'] ?? '';
+        } elseif ($row['status'] === 'pending') {
             $response = null;
             foreach (array_unique(array_filter([(string) $row['provider_order_id'], (string) $row['order_id']])) as $candidate) {
                 $response = Integrations::checkPaymentStatus($candidate);
@@ -379,11 +529,11 @@ final class App
         if ($query !== '') {
             $like = '%' . strtolower($query) . '%';
             $rows = Database::rows(
-                'SELECT id,email,display_name,disabled,created_at,last_login_at FROM store_accounts WHERE lower(email) LIKE ? OR lower(display_name) LIKE ? ORDER BY created_at DESC LIMIT 300',
+                'SELECT id,email,display_name,disabled,balance_inr,created_at,last_login_at FROM store_accounts WHERE lower(email) LIKE ? OR lower(display_name) LIKE ? ORDER BY created_at DESC LIMIT 300',
                 [$like, $like]
             );
         } else {
-            $rows = Database::rows('SELECT id,email,display_name,disabled,created_at,last_login_at FROM store_accounts ORDER BY created_at DESC LIMIT 300');
+            $rows = Database::rows('SELECT id,email,display_name,disabled,balance_inr,created_at,last_login_at FROM store_accounts ORDER BY created_at DESC LIMIT 300');
         }
         self::json(['accounts' => $rows]);
     }
@@ -444,7 +594,7 @@ final class App
                 $pdo->exec('COMMIT');
                 return ['status' => 'delivering'];
             }
-            if (!in_array((string) $fresh['status'], ['pending', 'paid_delivery_failed'], true)) {
+            if (!in_array((string) $fresh['status'], ['pending', 'wallet_paid', 'paid_delivery_failed'], true)) {
                 $status = (string) $fresh['status'];
                 $pdo->exec('COMMIT');
                 return ['status' => $status];

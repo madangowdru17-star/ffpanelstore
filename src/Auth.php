@@ -13,7 +13,7 @@ final class Auth
             return null;
         }
         $row = Database::row(
-            'SELECT s.csrf_token, s.expires_at, a.id, a.email, a.display_name, a.disabled '
+            'SELECT s.csrf_token, s.expires_at, a.id, a.email, a.display_name, a.disabled, a.balance_inr '
             . 'FROM store_sessions s JOIN store_accounts a ON a.id = s.account_id WHERE s.token_hash = ?',
             [hash('sha256', $token)]
         );
@@ -31,7 +31,20 @@ final class Auth
             'id' => (int) ($account['id'] ?? 0),
             'email' => (string) ($account['email'] ?? ''),
             'display_name' => (string) (($account['display_name'] ?? '') ?: ($account['email'] ?? 'Shop customer')),
+            'balance_inr' => (float) ($account['balance_inr'] ?? 0),
         ];
+    }
+
+    public static function updateProfile(array $account, array $body): array
+    {
+        self::requireCsrf($account);
+        $name = trim((string) ($body['display_name'] ?? ''));
+        if ($name === '' || (function_exists('mb_strlen') ? mb_strlen($name) : strlen($name)) > 100) {
+            throw new HttpError('Display name must be 1–100 characters.', 400);
+        }
+        Database::pdo()->prepare('UPDATE store_accounts SET display_name=? WHERE id=?')->execute([$name, (int) $account['id']]);
+        $updated = Database::row('SELECT id,email,display_name,balance_inr FROM store_accounts WHERE id=?', [(int) $account['id']]);
+        return ['ok' => true, 'account' => self::publicAccount($updated ?? $account)];
     }
 
     public static function register(array $body): array
