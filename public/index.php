@@ -12,6 +12,7 @@ require_once __DIR__ . '/../src/HttpError.php';
 require_once __DIR__ . '/../src/Database.php';
 require_once __DIR__ . '/../src/Catalog.php';
 require_once __DIR__ . '/../src/Auth.php';
+require_once __DIR__ . '/../src/GoogleOAuth.php';
 require_once __DIR__ . '/../src/Integrations.php';
 require_once __DIR__ . '/../src/Wallet.php';
 require_once __DIR__ . '/../src/Homepage.php';

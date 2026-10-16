@@ -26,6 +26,31 @@ final class App
         $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
         $path = rawurldecode((string) (parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?: '/'));
 
+        if ($method === 'GET' && $path === '/auth/google') {
+            GoogleOAuth::start();
+        }
+        if ($method === 'GET' && $path === '/auth/google/callback') {
+            GoogleOAuth::callback();
+        }
+        $customerPages = [
+            '/login' => 'pages/login.php', '/register' => 'pages/register.php',
+            '/wallet' => 'pages/wallet.php', '/add-funds' => 'pages/add-funds.php',
+            '/orders' => 'pages/orders.php', '/keys' => 'pages/keys.php',
+            '/account' => 'pages/account.php', '/help' => 'pages/help.php',
+            '/terms' => 'pages/terms.php', '/admin/dashboard' => 'pages/admin-dashboard.php',
+            '/admin/payments' => 'pages/admin-binance.php', '/admin/customers' => 'admin_customers.php',
+            '/admin/catalog' => 'catalog_admin.php', '/admin/homepage' => 'homepage_admin.php',
+        ];
+        if ($method === 'GET' && isset($customerPages[$path])) {
+            self::page($customerPages[$path]);
+            return;
+        }
+        if ($method === 'GET' && preg_match('#^/product/([a-z0-9_-]{2,60})$#i', $path, $match)) {
+            $_GET['product_key'] = strtolower($match[1]);
+            self::page('pages/product.php');
+            return;
+        }
+
         if ($method === 'GET' && $path === '/healthz') {
             self::json(['ok' => true]);
             return;
@@ -313,7 +338,18 @@ final class App
         }
         header('Content-Type: text/html; charset=utf-8');
         header('Cache-Control: no-cache, no-store, must-revalidate');
+        ob_start();
         require $file;
+        $html = (string) ob_get_clean();
+        $headAssets = '<script>(function(){try{var t=localStorage.getItem("hex_shop_theme");document.documentElement.dataset.theme=(t==="dark"||t==="light")?t:"light"}catch(e){document.documentElement.dataset.theme="light"}})();</script><link rel="stylesheet" href="/assets/css/theme.css">';
+        $bodyAssets = '<script src="/assets/js/theme.js" defer></script>';
+        if (stripos($html, '</head>') !== false) {
+            $html = preg_replace('/<\/head>/i', $headAssets . '</head>', $html, 1) ?? $html;
+        }
+        if (stripos($html, '</body>') !== false) {
+            $html = preg_replace('/<\/body>/i', $bodyAssets . '</body>', $html, 1) ?? $html;
+        }
+        echo $html;
     }
 
     private static function body(): array

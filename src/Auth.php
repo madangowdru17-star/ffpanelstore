@@ -100,6 +100,55 @@ final class Auth
         return ['ok' => true, 'account' => self::publicAccount($row), 'csrf_token' => $csrf];
     }
 
+    public static function googleLogin(array $claims): array
+    {
+        $email = strtolower(trim((string) ($claims['email'] ?? '')));
+        $subject = trim((string) ($claims['sub'] ?? ''));
+        $verified = filter_var($claims['email_verified'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        if (!$verified || $subject === '' || strlen($subject) > 255 || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new HttpError('Google did not return a verified account.', 401);
+        }
+        if (self::rateLimited('google_login', 20)) {
+            throw new HttpError('Too many sign-in attempts. Please try again later.', 429);
+        }
+        $pdo = Database::pdo();
+        $row = Database::row('SELECT * FROM store_accounts WHERE google_sub = ?', [$subject]);
+        if (!$row) {
+            $row = Database::row('SELECT * FROM store_accounts WHERE lower(email) = ?', [$email]);
+            if ($row && (int) ($row['disabled'] ?? 0) === 1) {
+                throw new HttpError('This account is disabled. Contact the shop administrator.', 403);
+            }
+            if ($row) {
+                $existingSubject = (string) ($row['google_sub'] ?? '');
+                if ($existingSubject !== '' && !hash_equals($existingSubject, $subject)) {
+                    throw new HttpError('This email is already linked to a different Google account.', 409);
+                }
+                $pdo->prepare("UPDATE store_accounts SET google_sub=?, display_name=CASE WHEN display_name='' THEN ? ELSE display_name END WHERE id=?")
+                    ->execute([$subject, self::slice(trim((string) ($claims['name'] ?? '')), 100), (int) $row['id']]);
+                $row = Database::row('SELECT * FROM store_accounts WHERE id=?', [(int) $row['id']]);
+            } else {
+                $name = self::slice(trim((string) ($claims['name'] ?? '')), 100);
+                $randomPassword = password_hash(bin2hex(random_bytes(48)), PASSWORD_DEFAULT);
+                try {
+                    $pdo->prepare('INSERT INTO store_accounts(email,password_hash,password_salt,display_name,google_sub,created_at,last_login_at) VALUES(?,?,?,?,?,?,?)')
+                        ->execute([$email, $randomPassword, '', $name, $subject, time(), time()]);
+                } catch (PDOException $e) {
+                    if (str_contains(strtolower($e->getMessage()), 'unique')) {
+                        throw new HttpError('This Google account could not be linked. Please sign in with your existing method.', 409);
+                    }
+                    throw $e;
+                }
+                $row = Database::row('SELECT * FROM store_accounts WHERE google_sub=?', [$subject]);
+            }
+        }
+        if (!$row || (int) ($row['disabled'] ?? 0) === 1) {
+            throw new HttpError('This account is disabled or unavailable.', 403);
+        }
+        $pdo->prepare('UPDATE store_accounts SET last_login_at=? WHERE id=?')->execute([time(), (int) $row['id']]);
+        $csrf = self::createSession((int) $row['id']);
+        return ['ok' => true, 'account' => self::publicAccount($row), 'csrf_token' => $csrf];
+    }
+
     public static function logout(): array
     {
         $token = (string) ($_COOKIE[self::SESSION_COOKIE] ?? '');

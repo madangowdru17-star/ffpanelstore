@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS store_accounts (
     password_hash TEXT NOT NULL,
     password_salt TEXT NOT NULL DEFAULT '',
     display_name TEXT NOT NULL DEFAULT '',
+    google_sub TEXT NOT NULL DEFAULT '',
     disabled INTEGER NOT NULL DEFAULT 0,
     balance_inr REAL NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
@@ -60,6 +61,13 @@ CREATE TABLE IF NOT EXISTS store_sessions (
     FOREIGN KEY(account_id) REFERENCES store_accounts(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_store_sessions_account ON store_sessions(account_id);
+CREATE TABLE IF NOT EXISTS store_google_oauth_states (
+    state_hash TEXT PRIMARY KEY,
+    code_verifier TEXT NOT NULL,
+    browser_hash TEXT NOT NULL DEFAULT '',
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS admin_sessions (
     token_hash TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL,
@@ -193,6 +201,30 @@ SQL);
         if (!$hasBalance) {
             self::pdo()->exec('ALTER TABLE store_accounts ADD COLUMN balance_inr REAL NOT NULL DEFAULT 0');
         }
+        $accountColumns = self::rows('PRAGMA table_info(store_accounts)');
+        $hasGoogleSub = false;
+        foreach ($accountColumns as $column) {
+            if (($column['name'] ?? '') === 'google_sub') {
+                $hasGoogleSub = true;
+                break;
+            }
+        }
+        if (!$hasGoogleSub) {
+            self::pdo()->exec("ALTER TABLE store_accounts ADD COLUMN google_sub TEXT NOT NULL DEFAULT ''");
+        }
+        $oauthColumns = self::rows('PRAGMA table_info(store_google_oauth_states)');
+        $hasBrowserHash = false;
+        foreach ($oauthColumns as $column) {
+            if (($column['name'] ?? '') === 'browser_hash') {
+                $hasBrowserHash = true;
+                break;
+            }
+        }
+        if (!$hasBrowserHash) {
+            self::pdo()->exec("ALTER TABLE store_google_oauth_states ADD COLUMN browser_hash TEXT NOT NULL DEFAULT ''");
+        }
+        self::pdo()->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_store_accounts_google_sub ON store_accounts(google_sub) WHERE google_sub != ''");
+        self::pdo()->exec('DELETE FROM store_google_oauth_states WHERE expires_at < ' . time());
         $checkoutColumns = self::rows('PRAGMA table_info(store_checkouts)');
         $hasIdempotencyKey = false;
         foreach ($checkoutColumns as $column) {

@@ -1,0 +1,3 @@
+<?php $pageTitle='Binance review | HEX CHEATS SHOP';require __DIR__.'/_head.php'; ?>
+<section class="hx-page-heading"><p class="hx-eyebrow">ADMIN PAYMENT REVIEW</p><h1>Binance USD top-ups</h1><p class="hx-muted">Proof review and wallet-credit approval remain in the existing authenticated admin queue.</p></section><section class="hx-panel"><p>Verify the transaction in the Binance receiving account before approving. A screenshot alone is not proof of receipt; the system credits the INR quote at most once.</p><a class="hx-button" href="/admin/customers">Open payments &amp; orders review</a></section>
+<?php require __DIR__.'/_foot.php'; ?>
