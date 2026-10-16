@@ -106,6 +106,44 @@ CREATE TABLE IF NOT EXISTS store_product_images (
     data BLOB NOT NULL,
     updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS store_catalog_products (
+    product_key TEXT PRIMARY KEY,
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    data_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS store_admin_users (
+    email TEXT PRIMARY KEY COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    disabled INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    last_login_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS store_home_banners (
+    slot INTEGER PRIMARY KEY CHECK(slot BETWEEN 1 AND 3),
+    title TEXT NOT NULL DEFAULT '',
+    subtitle TEXT NOT NULL DEFAULT '',
+    cta_label TEXT NOT NULL DEFAULT '',
+    cta_url TEXT NOT NULL DEFAULT '#catalog',
+    content_type TEXT NOT NULL DEFAULT '',
+    filename TEXT NOT NULL DEFAULT '',
+    image BLOB,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS store_fulfillment_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL,
+    attempt_no INTEGER NOT NULL,
+    request_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    provider_status TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    started_at INTEGER NOT NULL,
+    completed_at INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(order_id, attempt_no)
+);
+CREATE INDEX IF NOT EXISTS idx_fulfillment_attempts_order ON store_fulfillment_attempts(order_id, attempt_no DESC);
 CREATE TABLE IF NOT EXISTS store_auth_attempts (
     identity TEXT PRIMARY KEY,
     hits INTEGER NOT NULL,

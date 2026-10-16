@@ -120,11 +120,38 @@ final class Auth
         }
     }
 
+    public static function bootstrapAdmin(): void
+    {
+        if (Database::row('SELECT email FROM store_admin_users LIMIT 1')) {
+            return;
+        }
+        $email = strtolower(trim((string) (getenv('ADMIN_EMAIL') ?: '')));
+        $password = (string) (getenv('ADMIN_PASSWORD') ?: '');
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($password) < 10 || strlen($password) > 256) {
+            return;
+        }
+        Database::pdo()->prepare('INSERT OR IGNORE INTO store_admin_users(email,password_hash,created_at) VALUES(?,?,?)')
+            ->execute([$email, password_hash($password, PASSWORD_DEFAULT), time()]);
+    }
+
     public static function adminLogin(array $body): array
     {
+        $email = strtolower(trim((string) ($body['email'] ?? '')));
+        $password = (string) ($body['password'] ?? '');
+        if ($email !== '' || $password !== '') {
+            if (self::rateLimited('admin_login', 8)) {
+                throw new HttpError('Too many admin sign-in attempts. Try again in 15 minutes.', 429);
+            }
+            $row = Database::row('SELECT email,password_hash,disabled FROM store_admin_users WHERE lower(email)=?', [$email]);
+            if (!$row || (int) $row['disabled'] === 1 || !password_verify($password, (string) $row['password_hash'])) {
+                throw new HttpError('Email or password is incorrect.', 401);
+            }
+            Database::pdo()->prepare('UPDATE store_admin_users SET last_login_at=? WHERE email=?')->execute([time(), (string) $row['email']]);
+            return self::createAdminSession();
+        }
         $configured = trim((string) (getenv('ADMIN_WEB_KEY') ?: ''));
         if ($configured === '') {
-            throw new HttpError('Admin access is not configured. Set ADMIN_WEB_KEY in Railway.', 503);
+            throw new HttpError('Admin access is not configured. Set ADMIN_EMAIL and ADMIN_PASSWORD in Railway.', 503);
         }
         if (strlen($configured) < 24) {
             throw new HttpError('ADMIN_WEB_KEY must be at least 24 characters.', 503);
@@ -132,12 +159,35 @@ final class Auth
         if (!hash_equals($configured, (string) ($body['key'] ?? ''))) {
             throw new HttpError('Invalid admin key.', 401);
         }
+        return self::createAdminSession();
+    }
+
+    private static function createAdminSession(): array
+    {
         $token = bin2hex(random_bytes(32));
         $now = time();
         $statement = Database::pdo()->prepare('INSERT INTO admin_sessions(token_hash,expires_at,created_at) VALUES(?,?,?)');
         $statement->execute([hash('sha256', $token), $now + 43200, $now]);
         Database::pdo()->prepare('DELETE FROM admin_sessions WHERE expires_at < ?')->execute([$now]);
         return ['token' => $token, 'expires_in' => 43200];
+    }
+
+    public static function changeAdminPassword(array $body): array
+    {
+        $email = strtolower(trim((string) ($body['email'] ?? '')));
+        $current = (string) ($body['current_password'] ?? '');
+        $next = (string) ($body['new_password'] ?? '');
+        if (strlen($next) < 12 || strlen($next) > 256) {
+            throw new HttpError('New admin password must be at least 12 characters.', 400);
+        }
+        $row = Database::row('SELECT email,password_hash,disabled FROM store_admin_users WHERE lower(email)=?', [$email]);
+        if (!$row || (int) $row['disabled'] === 1 || !password_verify($current, (string) $row['password_hash'])) {
+            throw new HttpError('Admin email or current password is incorrect.', 401);
+        }
+        Database::pdo()->prepare('UPDATE store_admin_users SET password_hash=? WHERE email=?')
+            ->execute([password_hash($next, PASSWORD_DEFAULT), (string) $row['email']]);
+        Database::pdo()->exec('DELETE FROM admin_sessions');
+        return ['ok' => true, 'signed_out' => true];
     }
 
     public static function requireAdmin(): void

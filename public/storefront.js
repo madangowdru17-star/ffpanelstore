@@ -9,6 +9,13 @@ let activeOrder = '';
 let activePaymentType = 'checkout';
 let pollTimer = null;
 let pendingProduct = null;
+let homeConfig = {};
+let selectedCategory = 'all';
+let selectedPlatform = 'all';
+let selectedAccess = 'all';
+let activeSlide = 0;
+let carouselTimer = null;
+let detailProduct = null;
 let currency = localStorage.getItem('hex_shop_currency') === 'USD' ? 'USD' : 'INR';
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -73,26 +80,83 @@ function displayPrice(product, duration) {
   }
   return money(product.prices && product.prices[duration], 'INR');
 }
+function renderFilterGroups() {
+  const categories = [...new Set(products.map(p => String(p.category || '').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const platforms = [...new Set(products.map(p => String(p.platform || '').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const chip = (group, value, label, active) => `<button class="filter-btn ${active ? 'active' : ''}" type="button" data-filter-group="${group}" data-filter-value="${escapeHtml(value)}">${escapeHtml(label)}</button>`;
+  $('categoryFilters').innerHTML = [chip('category','all','All products',selectedCategory==='all'), ...categories.map(x=>chip('category',x,x,selectedCategory===x))].join('');
+  $('platformFilters').innerHTML = [chip('platform','all','All platforms',selectedPlatform==='all'), ...platforms.map(x=>chip('platform',x,x,selectedPlatform===x))].join('');
+  $('accessFilters').innerHTML = [chip('access','all','Any access type',selectedAccess==='all'), chip('access','root','Root',selectedAccess==='root'), chip('access','non_root','Non-root',selectedAccess==='non_root')].join('');
+}
 function renderProducts() {
   const query = $('search').value.trim().toLowerCase();
-  const shown = products.filter(p => (p.name + ' ' + p.category + ' ' + (p.features || []).join(' ')).toLowerCase().includes(query));
-  $('productCount').textContent = String(products.length).padStart(2, '0');
-  if (!shown.length) {
-    $('catalogGrid').innerHTML = '<div class="empty">No products match that search.</div>';
-    return;
-  }
-  $('catalogGrid').innerHTML = shown.map((p, i) => {
-    const options = (p.durations || []).map(duration =>
-      `<option value="${escapeHtml(duration)}">${escapeHtml(duration)} · ${escapeHtml(displayPrice(p, duration))}</option>`
-    ).join('');
-    const initials = escapeHtml(p.name.split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase());
-    return `<article class="product"><div class="product-image"><img src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div><span class="product-tag">${escapeHtml(p.category || 'Digital access')}</span></div><div class="product-body"><div class="product-title"><h3>${escapeHtml(p.name)}</h3><span class="category">${(p.durations || []).length} options</span></div><div class="features">${(p.features || []).slice(0, 4).map(f => `<span class="feature">${escapeHtml(f)}</span>`).join('')}</div>${p.demo_url ? `<a class="hint" href="${escapeHtml(p.demo_url)}" target="_blank" rel="noreferrer">Watch product demo</a>` : ''}<div class="buy-row"><select aria-label="Select access period for ${escapeHtml(p.name)}" id="duration-${i}">${options || '<option>No options</option>'}</select><button class="button" ${options ? '' : 'disabled'} onclick="buyProduct('${escapeHtml(p.key)}','duration-${i}')">Buy</button></div></div></article>`;
+  const shown = products.filter(p => {
+    const searchable = [p.name,p.category,p.platform,p.access_mode,p.description,...(p.features||[])].join(' ').toLowerCase();
+    return searchable.includes(query)
+      && (selectedCategory==='all' || p.category===selectedCategory)
+      && (selectedPlatform==='all' || p.platform===selectedPlatform)
+      && (selectedAccess==='all' || (p.access_mode||'all')===selectedAccess || (selectedAccess==='all' && (p.access_mode||'all')==='all'));
+  });
+  $('productCount').textContent = String(products.length);
+  if (!shown.length) { $('catalogGrid').innerHTML = '<div class="empty">No products match your search and filters.</div>'; return; }
+  $('catalogGrid').innerHTML = shown.map(p => {
+    const initials = escapeHtml(p.name.split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase());
+    const firstDuration = (p.durations||[])[0];
+    const firstPrice = firstDuration ? displayPrice(p,firstDuration) : 'Price unavailable';
+    const access = p.access_mode==='root'?'Root':p.access_mode==='non_root'?'Non-root':'Root + non-root';
+    const sold = Number(p.sold_count||0);
+    return `<article class="product"><div class="product-image" data-open-product="${escapeHtml(p.key)}"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div><div class="tag-row"><span class="product-tag">${escapeHtml(p.platform||p.category||'Digital')}</span><span class="product-tag">${escapeHtml(access)}</span></div></div><div class="product-body"><div class="product-title"><h3>${escapeHtml(p.name)}</h3><span class="category">${(p.durations||[]).length} options</span></div><div class="product-meta"><span>${escapeHtml(p.category||'Digital access')}</span>${sold>0?`<span>▣ ${sold.toLocaleString()} sold</span>`:''}</div><div class="features">${(p.features||[]).slice(0,2).map(f=>`<span class="feature">${escapeHtml(f)}</span>`).join('')}</div><div class="card-bottom"><span class="price">${escapeHtml(firstPrice)}</span><button class="button view-button" type="button" data-open-product="${escapeHtml(p.key)}">View details</button></div></div></article>`;
   }).join('');
+}
+function openProduct(key) {
+  const p=products.find(item=>item.key===key);if(!p)return;detailProduct=p;
+  const durations=(p.durations||[]).map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  const image=p.image_url?`<img class="product-detail-image" src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}" onerror="this.remove()">`:'';
+  const tags=[p.platform,p.access_mode==='root'?'Root':p.access_mode==='non_root'?'Non-root':'Root + non-root',p.category].filter(Boolean).map(x=>`<span class="product-tag">${escapeHtml(x)}</span>`).join('');
+  const links=`<div class="detail-actions">${p.demo_url?`<a class="button secondary" href="${escapeHtml(p.demo_url)}" target="_blank" rel="noopener noreferrer">Watch demo video</a>`:''}${p.download_url?`<a class="button secondary" href="${escapeHtml(p.download_url)}" target="_blank" rel="noopener noreferrer">Open product download</a>`:''}</div>`;
+  $('detailTitle').textContent=p.name;
+  $('productDetailBody').innerHTML=`${image}<div class="detail-tags">${tags}</div><p class="detail-copy">${escapeHtml(p.description||'Choose a duration below to see the available price and checkout options.')}</p><div class="features">${(p.features||[]).map(f=>`<span class="feature">${escapeHtml(f)}</span>`).join('')}</div>${links}<label class="field"><span class="hint">Choose duration</span><select class="detail-duration" id="detailDuration">${durations||'<option value="">No durations available</option>'}</select></label><div class="detail-price" id="detailPrice"></div><div class="hint">Final payment and wallet settlement are in INR. USD is a display option when that price is configured.</div><button class="button wide" id="detailBuy" type="button" ${durations?'':'disabled'}>Continue to checkout</button>`;
+  const update=()=>{const d=$('detailDuration')?.value;const inr=p.prices?.[d];$('detailPrice').textContent=`${displayPrice(p,d)}${currency==='USD'&&p.usd_prices?.[d]?` · ${money(inr,'INR')} charged`:''}`;};
+  $('detailDuration')?.addEventListener('change',update);update();
+  $('detailBuy')?.addEventListener('click',()=>{const d=$('detailDuration')?.value;if(d){$('productModal').classList.add('hidden');buyProduct(p.key,'detailDuration')}});
+  $('productModal').classList.remove('hidden');
+}
+async function loadHomepage() {
+  try {
+    const data=await request('/api/store/config');homeConfig=data;
+    const shopName=String(data.shop_name||'HEX CHEATS SHOP');
+    if($('shopName')?.firstChild)$('shopName').firstChild.textContent=shopName+' ';
+    $('footerShopName').textContent=shopName;
+    $('heroTitle').textContent=data.hero_title||'Browse the latest products';
+    $('heroSubtitle').textContent=data.hero_subtitle||'';
+    $('announcement').textContent=data.announcement||'';
+    document.title=`${shopName} | Digital products`;
+    const fallback=[
+      ['Featured line-up','Explore products for your platform and choose the access period that works for you.'],
+      ['Choose your access','Compare product details, demo videos, download links, and durations before checkout.'],
+      ['Secure checkout','Track payments, wallet balance, and delivery keys together in your shop profile.']
+    ];
+    const banners=(data.banners||[]).slice(0,3);
+    while(banners.length<3)banners.push({slot:banners.length+1,title:'',subtitle:'',cta_label:'Browse products',cta_url:'#catalog',image_url:''});
+    $('heroSlides').innerHTML=banners.map((b,i)=>{
+      const title=b.title||fallback[i][0],subtitle=b.subtitle||fallback[i][1],url=b.cta_url||'#catalog';
+      const external=String(url).startsWith('https://');
+      return `<article class="slide ${i===0?'active':''}">${b.image_url?`<img class="slide-image" src="${escapeHtml(b.image_url)}" alt="" onerror="this.remove()">`:''}<div class="slide-shade"></div><div class="slide-content"><div class="slide-kicker">HEX CHEATS SHOP · PROMOTION ${i+1}</div><h2>${escapeHtml(title)}</h2><p>${escapeHtml(subtitle)}</p><a class="button" href="${escapeHtml(url)}" ${external?'target="_blank" rel="noopener noreferrer"':''}>${escapeHtml(b.cta_label||'Browse products')}</a></div></article>`;
+    }).join('');
+    $('heroDots').innerHTML=banners.map((_,i)=>`<button class="dot ${i===0?'active':''}" type="button" aria-label="Show banner ${i+1}" data-slide="${i}"></button>`).join('');
+    activeSlide=0;clearInterval(carouselTimer);carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500);
+  } catch { console.warn('Homepage settings could not be loaded.'); }
+}
+function goSlide(index) {
+  const slides=[...document.querySelectorAll('#heroSlides .slide')],dots=[...document.querySelectorAll('#heroDots .dot')];
+  if(!slides.length)return;activeSlide=(index+slides.length)%slides.length;
+  slides.forEach((el,i)=>el.classList.toggle('active',i===activeSlide));dots.forEach((el,i)=>el.classList.toggle('active',i===activeSlide));
 }
 async function loadProducts() {
   try {
     const data = await request('/api/store/products');
     products = data.products || [];
+    renderFilterGroups();
     renderProducts();
   } catch (e) {
     $('catalogGrid').innerHTML = `<div class="empty">${escapeHtml(e.message)}<br><small>Refresh to try again.</small></div>`;
@@ -149,7 +213,7 @@ async function loadOrders() {
   try {
     const data = await request('/api/store/orders');
     const rows = data.orders || [];
-    $('orders').innerHTML = rows.length ? rows.map(o => `<div class="order"><div><strong>${escapeHtml(o.product_name)}</strong><small>${escapeHtml(o.duration)} · ${escapeHtml(o.order_id)}</small></div><div>${escapeHtml(money(o.amount, 'INR'))}</div><div class="order-status">${escapeHtml(o.status)}</div><div class="order-key">${o.delivery_key ? escapeHtml(o.delivery_key) : '<span class="muted">Waiting for delivery/verification</span>'}</div></div>`).join('') : '<div class="empty">Your completed and pending orders will appear here.</div>';
+    $('ordersList').innerHTML = rows.length ? rows.map(o => `<div class="order"><div><strong>${escapeHtml(o.product_name)}</strong><small>${escapeHtml(o.duration)} · ${escapeHtml(o.order_id)}</small></div><div>${escapeHtml(money(o.amount, 'INR'))}</div><div class="order-status">${escapeHtml(o.status)}</div><div class="order-key">${o.delivery_key ? escapeHtml(o.delivery_key) : '<span class="muted">Delivery is pending or under admin review.</span>'}</div></div>`).join('') : '<div class="empty">Your completed and pending orders will appear here.</div>';
   } catch {}
 }
 async function authSubmit(event) {
@@ -314,6 +378,7 @@ async function pollStatus() {
     $('paymentStatus').textContent = status === 'complete' ? 'Payment verified — your order key is shown below.'
       : status === 'failed' ? 'Payment was not completed. You can start a new checkout.'
       : status === 'paid_delivery_failed' ? 'Payment received; delivery needs administrator review.'
+      : status === 'delivery_unknown' ? 'Payment received; supplier delivery is being checked. Please do not place a duplicate order.'
       : status === 'amount_review' ? 'Payment received; amount is being reviewed.'
       : 'Waiting for payment confirmation…';
     if (status === 'complete') {
@@ -321,7 +386,7 @@ async function pollStatus() {
       $('paymentDetails').innerHTML = `Order <strong>${escapeHtml(data.order_id)}</strong><br>${escapeHtml(data.product_name)} · ${escapeHtml(data.duration)}<br>Delivery key: <strong>${escapeHtml(data.delivery_key)}</strong>`;
       await loadOrders();
       toast('Payment confirmed. Your order is ready.');
-    } else if (['failed', 'paid_delivery_failed', 'amount_review'].includes(status)) clearInterval(pollTimer);
+    } else if (['failed', 'paid_delivery_failed', 'delivery_unknown', 'amount_review'].includes(status)) clearInterval(pollTimer);
   } catch {
     $('paymentStatus').textContent = 'Could not check status right now. Try again shortly.';
   }
@@ -346,18 +411,26 @@ function setCurrency(value) {
   localStorage.setItem('hex_shop_currency', currency);
   $('currencySelect').value = currency;
   renderProducts();
+  if(detailProduct && !$('productModal').classList.contains('hidden'))openProduct(detailProduct.key);
   $('currencyNote').textContent = currency === 'USD'
     ? 'USD prices are shown only where set by the shop. Wallet balances and all payments settle in INR.'
     : 'Wallet balances and all payments settle in INR.';
 }
 
 $('authOpen').addEventListener('click', openAuth);
-$('heroAccount').addEventListener('click', openAuth);
 $('loginTab').addEventListener('click', () => setAuthMode('login'));
 $('registerTab').addEventListener('click', () => setAuthMode('register'));
 $('authForm').addEventListener('submit', authSubmit);
 $('search').addEventListener('input', renderProducts);
 $('currencySelect').addEventListener('change', event => setCurrency(event.target.value));
+$('heroPrev').addEventListener('click',()=>{clearInterval(carouselTimer);goSlide(activeSlide-1);carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500)});
+$('heroNext').addEventListener('click',()=>{clearInterval(carouselTimer);goSlide(activeSlide+1);carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500)});
+document.addEventListener('click',event=>{
+  const filter=event.target.closest('[data-filter-group]');
+  if(filter){const group=filter.dataset.filterGroup,value=filter.dataset.filterValue;if(group==='category')selectedCategory=value;if(group==='platform')selectedPlatform=value;if(group==='access')selectedAccess=value;renderFilterGroups();renderProducts();return}
+  const dot=event.target.closest('[data-slide]');if(dot){clearInterval(carouselTimer);goSlide(Number(dot.dataset.slide));carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500);return}
+  const card=event.target.closest('[data-open-product]');if(card)openProduct(card.dataset.openProduct);
+});
 $('checkPayment').addEventListener('click', pollStatus);
 $('profileForm').addEventListener('submit', saveProfile);
 $('topupForm').addEventListener('submit', startTopup);
@@ -384,5 +457,6 @@ document.querySelectorAll('.modal').forEach(modal => modal.addEventListener('cli
 }));
 $('year').textContent = new Date().getFullYear();
 setCurrency(currency);
+loadHomepage();
 loadProducts();
 syncSession();

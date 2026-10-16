@@ -91,7 +91,7 @@ final class Integrations
         return ['body' => $response['body'], 'content_type' => $contentType];
     }
 
-    public static function buyProduct(string $productId, string $duration): array
+    public static function buyProduct(string $productId, string $duration, string $requestId = ''): array
     {
         $apiKey = trim((string) (getenv('XYZ_API_KEY') ?: ''));
         $masterKey = trim((string) (getenv('XYZ_MASTER_KEY') ?: ''));
@@ -99,15 +99,46 @@ final class Integrations
             throw new RuntimeException('Reseller API credentials are not configured.');
         }
         $url = (string) (getenv('XYZ_API_URL') ?: 'https://bantibhaiya.to/api/reseller_v1.php');
-        return self::jsonRequest($url, 'POST', [
+        $headers = [
             'Content-Type: application/x-www-form-urlencoded',
             'x-master-key: ' . $masterKey,
-        ], [
+        ];
+        if ($requestId !== '' && preg_match('/^[A-Za-z0-9_-]{1,100}$/', $requestId)) {
+            $headers[] = 'Idempotency-Key: ' . $requestId;
+        }
+        return self::jsonRequest($url, 'POST', $headers, [
             'api_key' => $apiKey,
             'action' => 'buy',
             'product_id' => $productId,
             'duration' => $duration,
         ], 30, true);
+    }
+
+    public static function deliveryFields(array $response): array
+    {
+        $data = self::data($response);
+        $status = strtolower(trim((string) ($data['status'] ?? $response['status'] ?? '')));
+        $key = '';
+        foreach (['key', 'api_key', 'license_key', 'token', 'access_key'] as $field) {
+            $candidate = $data[$field] ?? $response[$field] ?? null;
+            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
+                $key = trim((string) $candidate);
+                break;
+            }
+        }
+        if ($key === '' && is_array($data['result'] ?? null)) {
+            foreach (['key', 'api_key', 'license_key', 'token', 'access_key'] as $field) {
+                $candidate = $data['result'][$field] ?? null;
+                if (is_scalar($candidate) && trim((string) $candidate) !== '') {
+                    $key = trim((string) $candidate);
+                    break;
+                }
+            }
+        }
+        if (str_starts_with($key, 'Key: ')) {
+            $key = trim(substr($key, 5));
+        }
+        return ['status' => $status, 'key' => $key];
     }
 
     private static function data(array $response): array

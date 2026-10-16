@@ -7,6 +7,8 @@ final class App
     {
         try {
             Database::initialize();
+            Catalog::ensureSeeded();
+            Auth::bootstrapAdmin();
             header('X-Content-Type-Options: nosniff');
             header('Referrer-Policy: strict-origin-when-cross-origin');
             header('X-Frame-Options: DENY');
@@ -44,8 +46,12 @@ final class App
             self::page('admin_customers.php');
             return;
         }
+        if ($method === 'GET' && $path === '/admin/homepage') {
+            self::page('homepage_admin.php');
+            return;
+        }
         if ($method === 'GET' && $path === '/api/store/config') {
-            self::json(['shop_name' => 'HEX CHEATS SHOP', 'currency' => 'INR', 'display_currencies' => ['INR', 'USD'], 'settlement_currency' => 'INR']);
+            self::json(array_merge(Homepage::publicConfig(), ['currency' => 'INR', 'display_currencies' => ['INR', 'USD'], 'settlement_currency' => 'INR']));
             return;
         }
         if ($method === 'GET' && $path === '/api/store/products') {
@@ -54,6 +60,10 @@ final class App
         }
         if ($method === 'GET' && preg_match('#^/api/store/images/([a-z0-9_-]{2,60})$#i', $path, $match)) {
             self::productImage(strtolower($match[1]));
+            return;
+        }
+        if ($method === 'GET' && preg_match('#^/api/store/banners/([1-3])/image$#', $path, $match)) {
+            Homepage::bannerImage((int) $match[1]);
             return;
         }
         if ($method === 'GET' && $path === '/api/store/session') {
@@ -152,6 +162,35 @@ final class App
                 self::json(['products' => Catalog::adminProducts()]);
                 return;
             }
+            if ($method === 'GET' && $path === '/admin/api/homepage') {
+                self::json(['homepage' => Homepage::adminConfig()]);
+                return;
+            }
+            if ($method === 'PUT' && $path === '/admin/api/homepage') {
+                self::json(Homepage::updateSettings(self::body()));
+                return;
+            }
+            if ($method === 'POST' && $path === '/admin/api/admin/password') {
+                self::json(Auth::changeAdminPassword(self::body()));
+                return;
+            }
+            if (preg_match('#^/admin/api/banners/([1-3])(/image)?$#', $path, $match)) {
+                $slot = (int) $match[1];
+                $isImage = ($match[2] ?? '') === '/image';
+                if ($isImage && $method === 'POST') {
+                    self::json(Homepage::uploadBanner($slot));
+                    return;
+                }
+                if ($isImage && $method === 'DELETE') {
+                    Homepage::deleteBannerImage($slot);
+                    self::json(['ok' => true]);
+                    return;
+                }
+                if (!$isImage && $method === 'PUT') {
+                    self::json(Homepage::updateBanner($slot, self::body()));
+                    return;
+                }
+            }
             if ($method === 'POST' && $path === '/admin/api/products') {
                 $body = self::body();
                 $key = self::validProductKey((string) ($body['key'] ?? ''));
@@ -197,8 +236,16 @@ final class App
                 self::setAccountStatus((int) $match[1]);
                 return;
             }
+            if ($method === 'POST' && preg_match('#^/admin/api/store/accounts/(\d+)/wallet$#', $path, $match)) {
+                self::adjustAccountWallet((int) $match[1]);
+                return;
+            }
             if ($method === 'POST' && preg_match('#^/admin/api/store/orders/([A-Za-z0-9_-]{4,80})/retry$#', $path, $match)) {
                 self::retryDelivery($match[1]);
+                return;
+            }
+            if ($method === 'POST' && preg_match('#^/admin/api/store/orders/([A-Za-z0-9_-]{4,80})/manual-key$#', $path, $match)) {
+                self::saveManualDeliveryKey($match[1]);
                 return;
             }
             throw new HttpError('Admin API route not found.', 404);
@@ -553,10 +600,51 @@ final class App
         self::json(['ok' => true, 'disabled' => (bool) $disabled]);
     }
 
+    private static function adjustAccountWallet(int $accountId): void
+    {
+        $body = self::body();
+        $amount = filter_var($body['amount_inr'] ?? null, FILTER_VALIDATE_FLOAT);
+        $reason = trim((string) ($body['reason'] ?? ''));
+        if ($amount === false || !is_finite((float) $amount) || abs((float) $amount) < 0.01 || abs((float) $amount) > 1000000) {
+            throw new HttpError('Enter a non-zero wallet adjustment up to ₹1,000,000.', 400);
+        }
+        if ($reason === '' || mb_strlen($reason) > 240) {
+            throw new HttpError('A reason of 1–240 characters is required for every wallet adjustment.', 400);
+        }
+        $pdo = Database::pdo();
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $account = Database::row('SELECT balance_inr FROM store_accounts WHERE id=?', [$accountId]);
+            if (!$account) {
+                throw new HttpError('Customer account not found.', 404);
+            }
+            $balance = round((float) $account['balance_inr'] + (float) $amount, 2);
+            if ($balance < 0) {
+                throw new HttpError('Wallet debit cannot make the balance negative.', 409);
+            }
+            $pdo->prepare('UPDATE store_accounts SET balance_inr=? WHERE id=?')->execute([$balance, $accountId]);
+            $reference = 'ADMIN-' . strtoupper(bin2hex(random_bytes(10)));
+            $kind = (float) $amount > 0 ? 'admin_credit' : 'admin_debit';
+            $pdo->prepare('INSERT INTO store_wallet_transactions(account_id,kind,amount_inr,balance_after,reference_id,description,created_at) VALUES(?,?,?,?,?,?,?)')
+                ->execute([$accountId, $kind, (float) $amount, $balance, $reference, 'Admin adjustment: ' . $reason, time()]);
+            $pdo->exec('COMMIT');
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
+            }
+            throw $e;
+        }
+        self::json(['ok' => true, 'balance_inr' => $balance]);
+    }
+
     private static function adminOrders(): void
     {
         $rows = Database::rows(
-            'SELECT c.order_id,c.account_id,a.email,c.product_name,c.duration,c.amount_inr AS amount,c.status,c.delivery_key,c.transaction_id,c.created_at,c.updated_at '
+            'SELECT c.order_id,c.account_id,a.email,c.product_name,c.duration,c.amount_inr AS amount,c.status,c.delivery_key,c.transaction_id,c.created_at,c.updated_at, '
+            . '(SELECT COUNT(*) FROM store_fulfillment_attempts f WHERE f.order_id=c.order_id) AS fulfillment_attempt_count, '
+            . '(SELECT f.status FROM store_fulfillment_attempts f WHERE f.order_id=c.order_id ORDER BY f.attempt_no DESC LIMIT 1) AS last_fulfillment_attempt_status, '
+            . '(SELECT f.provider_status FROM store_fulfillment_attempts f WHERE f.order_id=c.order_id ORDER BY f.attempt_no DESC LIMIT 1) AS last_provider_status, '
+            . '(SELECT f.error_message FROM store_fulfillment_attempts f WHERE f.order_id=c.order_id ORDER BY f.attempt_no DESC LIMIT 1) AS last_fulfillment_error '
             . 'FROM store_checkouts c LEFT JOIN store_accounts a ON a.id=c.account_id ORDER BY c.created_at DESC LIMIT 300'
         );
         self::json(['orders' => $rows]);
@@ -564,21 +652,89 @@ final class App
 
     private static function retryDelivery(string $orderId): void
     {
+        $body = self::body();
         $row = Database::row('SELECT * FROM store_checkouts WHERE order_id = ?', [$orderId]);
         if (!$row) {
             throw new HttpError('Order not found.', 404);
         }
-        if ((string) $row['status'] !== 'paid_delivery_failed') {
-            throw new HttpError('Only paid orders with a failed delivery can be retried.', 409);
+        $status = (string) $row['status'];
+        if ($status === 'delivering' && (int) $row['updated_at'] < time() - 180 && !empty($body['confirm_provider_checked'])) {
+            Database::pdo()->prepare("UPDATE store_checkouts SET status='delivery_unknown',updated_at=? WHERE order_id=? AND status='delivering'")
+                ->execute([time(), $orderId]);
+            Database::pdo()->prepare("UPDATE store_fulfillment_attempts SET status='unknown',error_message='Worker stopped before confirming the supplier result.',completed_at=? WHERE order_id=? AND status='started'")
+                ->execute([time(), $orderId]);
+            $row['status'] = 'delivery_unknown';
+            $status = 'delivery_unknown';
         }
-        $result = self::deliverCheckout($row, (string) $row['transaction_id']);
+        if (!in_array($status, ['paid_delivery_failed', 'delivery_unknown'], true)) {
+            throw new HttpError('This order is not eligible for a supplier retry.', 409);
+        }
+        if (empty($body['confirm_provider_checked'])) {
+            throw new HttpError('Check the supplier account for this order before confirming a retry.', 409);
+        }
+        $result = self::deliverCheckout($row, (string) $row['transaction_id'], true);
         self::json($result);
     }
 
-    private static function deliverCheckout(array $order, string $transactionId): array
+    private static function saveManualDeliveryKey(string $orderId): void
+    {
+        $body = self::body();
+        if (empty($body['confirm_provider_checked'])) {
+            throw new HttpError('Confirm that you checked the supplier account before saving a key.', 409);
+        }
+        $key = trim((string) ($body['delivery_key'] ?? ''));
+        if (strlen($key) < 2 || strlen($key) > 4096) {
+            throw new HttpError('Enter a delivery key between 2 and 4,096 characters.', 400);
+        }
+        $reference = trim((string) ($body['transaction_id'] ?? ''));
+        if (strlen($reference) > 120) {
+            throw new HttpError('Supplier transaction reference is too long.', 400);
+        }
+        $pdo = Database::pdo();
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $order = Database::row('SELECT * FROM store_checkouts WHERE order_id=?', [$orderId]);
+            if (!$order) {
+                throw new HttpError('Order not found.', 404);
+            }
+            if ((string) $order['status'] === 'complete') {
+                throw new HttpError('This order already has a saved delivery key.', 409);
+            }
+            if (!in_array((string) $order['status'], ['paid_delivery_failed', 'delivery_unknown', 'delivering'], true)) {
+                throw new HttpError('Manual key recovery is only available for paid orders needing delivery review.', 409);
+            }
+            if ((string) $order['status'] === 'delivering' && (int) $order['updated_at'] >= time() - 180) {
+                throw new HttpError('A supplier request is still marked in progress. Wait three minutes, then review it again.', 409);
+            }
+            $transactionId = $reference !== '' ? $reference : (string) $order['transaction_id'];
+            $now = time();
+            $pdo->prepare("UPDATE store_checkouts SET status='complete',delivery_key=?,transaction_id=?,updated_at=? WHERE order_id=?")
+                ->execute([$key, $transactionId, $now, $orderId]);
+            $pdo->prepare(
+                'INSERT INTO store_orders(order_id,account_id,product_key,product_name,duration,amount,delivery_key,status,created_at,transaction_id) VALUES(?,?,?,?,?,?,?,?,?,?) '
+                . 'ON CONFLICT(order_id) DO UPDATE SET delivery_key=excluded.delivery_key,status=excluded.status,transaction_id=excluded.transaction_id'
+            )->execute([
+                $orderId, (int) $order['account_id'], (string) $order['product_key'], (string) $order['product_name'],
+                (string) $order['duration'], (float) $order['amount_inr'], $key, 'complete', $now, $transactionId,
+            ]);
+            $pdo->prepare("UPDATE store_fulfillment_attempts SET status='manually_recovered',completed_at=? WHERE order_id=? AND status IN ('started','unknown')")
+                ->execute([$now, $orderId]);
+            $pdo->exec('COMMIT');
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
+            }
+            throw $e;
+        }
+        self::json(['ok' => true, 'order_id' => $orderId, 'status' => 'complete', 'key_saved' => true]);
+    }
+
+    private static function deliverCheckout(array $order, string $transactionId, bool $allowUnknownRetry = false): array
     {
         $orderId = (string) $order['order_id'];
         $pdo = Database::pdo();
+        $attemptNo = 0;
+        $requestId = 'HEX_' . $orderId;
         $pdo->exec('BEGIN IMMEDIATE');
         try {
             $fresh = Database::row('SELECT * FROM store_checkouts WHERE order_id = ?', [$orderId]);
@@ -594,13 +750,22 @@ final class App
                 $pdo->exec('COMMIT');
                 return ['status' => 'delivering'];
             }
-            if (!in_array((string) $fresh['status'], ['pending', 'wallet_paid', 'paid_delivery_failed'], true)) {
+            $allowed = ['pending', 'wallet_paid', 'paid_delivery_failed'];
+            if ($allowUnknownRetry) {
+                $allowed[] = 'delivery_unknown';
+            }
+            if (!in_array((string) $fresh['status'], $allowed, true)) {
                 $status = (string) $fresh['status'];
                 $pdo->exec('COMMIT');
                 return ['status' => $status];
             }
+            $last = Database::row('SELECT COALESCE(MAX(attempt_no),0) AS n FROM store_fulfillment_attempts WHERE order_id=?', [$orderId]);
+            $attemptNo = (int) ($last['n'] ?? 0) + 1;
+            $now = time();
             $pdo->prepare("UPDATE store_checkouts SET status='delivering',transaction_id=?,updated_at=? WHERE order_id=?")
-                ->execute([$transactionId, time(), $orderId]);
+                ->execute([$transactionId, $now, $orderId]);
+            $pdo->prepare('INSERT INTO store_fulfillment_attempts(order_id,attempt_no,request_id,status,started_at) VALUES(?,?,?,?,?)')
+                ->execute([$orderId, $attemptNo, $requestId, 'started', $now]);
             $order = $fresh;
             $pdo->exec('COMMIT');
         } catch (Throwable $e) {
@@ -610,18 +775,23 @@ final class App
             throw $e;
         }
         try {
-            $result = Integrations::buyProduct((string) $order['product_id'], (string) $order['api_duration']);
-            $status = strtolower((string) ($result['status'] ?? ''));
-            $key = trim((string) ($result['key'] ?? ''));
-            if (str_starts_with($key, 'Key: ')) {
-                $key = trim(substr($key, 5));
-            }
-            if ($status !== 'success' || $key === '') {
-                throw new RuntimeException('Reseller delivery was not confirmed.');
+            $result = Integrations::buyProduct((string) $order['product_id'], (string) $order['api_duration'], $requestId);
+            $delivery = Integrations::deliveryFields($result);
+            $providerStatus = (string) $delivery['status'];
+            $key = (string) $delivery['key'];
+            if ($providerStatus !== 'success' || $key === '') {
+                Database::pdo()->prepare("UPDATE store_checkouts SET status='delivery_unknown',updated_at=? WHERE order_id=? AND status='delivering'")
+                    ->execute([time(), $orderId]);
+                Database::pdo()->prepare("UPDATE store_fulfillment_attempts SET status='unknown',provider_status=?,error_message='Supplier response did not include a confirmed key; inspect the supplier account before retrying.',completed_at=? WHERE order_id=? AND attempt_no=?")
+                    ->execute([substr($providerStatus, 0, 80), time(), $orderId, $attemptNo]);
+                return ['status' => 'delivery_unknown'];
             }
         } catch (Throwable) {
-            $pdo->prepare("UPDATE store_checkouts SET status='paid_delivery_failed',updated_at=? WHERE order_id=? AND status='delivering'")->execute([time(), $orderId]);
-            return ['status' => 'paid_delivery_failed'];
+            Database::pdo()->prepare("UPDATE store_checkouts SET status='delivery_unknown',updated_at=? WHERE order_id=? AND status='delivering'")
+                ->execute([time(), $orderId]);
+            Database::pdo()->prepare("UPDATE store_fulfillment_attempts SET status='unknown',error_message='Supplier request outcome could not be confirmed; inspect the supplier account before retrying.',completed_at=? WHERE order_id=? AND attempt_no=?")
+                ->execute([time(), $orderId, $attemptNo]);
+            return ['status' => 'delivery_unknown'];
         }
         $now = time();
         $pdo->exec('BEGIN IMMEDIATE');
@@ -634,6 +804,8 @@ final class App
                 $orderId, (int) $order['account_id'], (string) $order['product_key'], (string) $order['product_name'],
                 (string) $order['duration'], (float) $order['amount_inr'], $key, 'complete', $now, $transactionId,
             ]);
+            $pdo->prepare("UPDATE store_fulfillment_attempts SET status='complete',provider_status='success',error_message='',completed_at=? WHERE order_id=? AND attempt_no=?")
+                ->execute([$now, $orderId, $attemptNo]);
             $pdo->exec('COMMIT');
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
