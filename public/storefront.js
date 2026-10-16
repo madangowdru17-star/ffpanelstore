@@ -22,7 +22,9 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 }[ch]));
 const numberValue = value => {
-  const n = Number(String(value ?? '').replace(/[^0-9.-]/g, ''));
+  const cleaned = String(value ?? '').replace(/[^0-9.-]/g, '');
+  if (!cleaned) return null;
+  const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
 };
 const money = (value, code = currency) => {
@@ -106,21 +108,16 @@ function renderProducts() {
     const firstPrice = firstDuration ? displayPrice(p,firstDuration) : 'Price unavailable';
     const access = p.access_mode==='root'?'Root':p.access_mode==='non_root'?'Non-root':'Root + non-root';
     const sold = Number(p.sold_count||0);
-    return `<article class="product"><div class="product-image" data-open-product="${escapeHtml(p.key)}"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div><div class="tag-row"><span class="product-tag">${escapeHtml(p.platform||p.category||'Digital')}</span><span class="product-tag">${escapeHtml(access)}</span></div></div><div class="product-body"><div class="product-title"><h3>${escapeHtml(p.name)}</h3><span class="category">${(p.durations||[]).length} options</span></div><div class="product-meta"><span>${escapeHtml(p.category||'Digital access')}</span>${sold>0?`<span>▣ ${sold.toLocaleString()} sold</span>`:''}</div><div class="features">${(p.features||[]).slice(0,2).map(f=>`<span class="feature">${escapeHtml(f)}</span>`).join('')}</div><div class="card-bottom"><span class="price">${escapeHtml(firstPrice)}</span><button class="button view-button" type="button" data-open-product="${escapeHtml(p.key)}">View details</button></div></div></article>`;
+    const detailUrl=`/product/${encodeURIComponent(p.key)}`;
+    const maintenance=Boolean(p.maintenance);
+    const firstStock=firstDuration!==undefined&&p.stock&&p.stock[firstDuration]!==undefined?numberValue(p.stock[firstDuration]):null;
+    const outOfStock=firstStock!==null&&firstStock<=0;
+    return `<article class="product reference-product" data-product-url="${escapeHtml(detailUrl)}"><a class="product-image" href="${escapeHtml(detailUrl)}" aria-label="View ${escapeHtml(p.name)} details"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div><div class="tag-row"><span class="product-tag">${escapeHtml(p.platform||p.category||'Digital')}</span><span class="product-tag">${escapeHtml(access)}</span></div></a><div class="product-body"><a class="reference-product-title" href="${escapeHtml(detailUrl)}" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</a><div class="reference-product-meta">${escapeHtml(p.platform||p.category||'Digital access')}${sold>0?` · ${sold.toLocaleString()} sold`:''}</div><span class="reference-price">${escapeHtml(firstPrice)}</span><div class="reference-card-actions"><a class="button setup-button ${p.download_url?'':'is-unavailable'}" ${p.download_url?`href="${escapeHtml(p.download_url)}" target="_blank" rel="noopener noreferrer"`:'aria-disabled="true" title="No setup link is configured"'}>▣ FILE &amp; SETUP</a><button class="button buy-button ${maintenance?'is-maintenance':''}" type="button" data-detail-open="${escapeHtml(p.key)}" ${maintenance||outOfStock?'disabled':''}>${maintenance?'⚒ MAINTENANCE':outOfStock?'OUT OF STOCK':'🛒 BUY NOW'}</button></div></div></article>`;
   }).join('');
 }
 function openProduct(key) {
-  const p=products.find(item=>item.key===key);if(!p)return;detailProduct=p;
-  const durations=(p.durations||[]).map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
-  const image=p.image_url?`<img class="product-detail-image" src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}" onerror="this.remove()">`:'';
-  const tags=[p.platform,p.access_mode==='root'?'Root':p.access_mode==='non_root'?'Non-root':'Root + non-root',p.category].filter(Boolean).map(x=>`<span class="product-tag">${escapeHtml(x)}</span>`).join('');
-  const links=`<div class="detail-actions">${p.demo_url?`<a class="button secondary" href="${escapeHtml(p.demo_url)}" target="_blank" rel="noopener noreferrer">Watch demo video</a>`:''}${p.download_url?`<a class="button secondary" href="${escapeHtml(p.download_url)}" target="_blank" rel="noopener noreferrer">Open product download</a>`:''}</div>`;
-  $('detailTitle').textContent=p.name;
-  $('productDetailBody').innerHTML=`${image}<div class="detail-tags">${tags}</div><p class="detail-copy">${escapeHtml(p.description||'Choose a duration below to see the available price and checkout options.')}</p><div class="features">${(p.features||[]).map(f=>`<span class="feature">${escapeHtml(f)}</span>`).join('')}</div>${links}<label class="field"><span class="hint">Choose duration</span><select class="detail-duration" id="detailDuration">${durations||'<option value="">No durations available</option>'}</select></label><div class="detail-price" id="detailPrice"></div><div class="hint">Final payment and wallet settlement are in INR. USD is a display option when that price is configured.</div><button class="button wide" id="detailBuy" type="button" ${durations?'':'disabled'}>Continue to checkout</button>`;
-  const update=()=>{const d=$('detailDuration')?.value;const inr=p.prices?.[d];$('detailPrice').textContent=`${displayPrice(p,d)}${currency==='USD'&&p.usd_prices?.[d]?` · ${money(inr,'INR')} charged`:''}`;};
-  $('detailDuration')?.addEventListener('change',update);update();
-  $('detailBuy')?.addEventListener('click',()=>{const d=$('detailDuration')?.value;if(d){$('productModal').classList.add('hidden');buyProduct(p.key,'detailDuration')}});
-  $('productModal').classList.remove('hidden');
+  const p=products.find(item=>item.key===key);
+  if(p)location.href=`/product/${encodeURIComponent(p.key)}`;
 }
 async function loadHomepage() {
   try {
@@ -544,6 +541,8 @@ document.addEventListener('click',event=>{
   if(profileTab){setProfileTab(profileTab.dataset.profileTab);return}
   const dot=event.target.closest('[data-slide]');if(dot){clearInterval(carouselTimer);goSlide(Number(dot.dataset.slide));carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500);return}
   const card=event.target.closest('[data-open-product]');if(card)openProduct(card.dataset.openProduct);
+  const direct=event.target.closest('[data-detail-open]');if(direct){event.preventDefault();openProduct(direct.dataset.detailOpen);return}
+  const cardSurface=event.target.closest('[data-product-url]');if(cardSurface&&!event.target.closest('a,button'))location.href=cardSurface.dataset.productUrl;
 });
 $('checkPayment').addEventListener('click', pollStatus);
 $('profileForm').addEventListener('submit', saveProfile);

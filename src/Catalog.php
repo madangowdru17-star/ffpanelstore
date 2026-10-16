@@ -119,7 +119,7 @@ final class Catalog
         $result = [];
         foreach (self::keys() as $key) {
             $product = self::effective($key);
-            if (!$product['enabled'] || $product['maintenance']) {
+            if (!$product['enabled']) {
                 continue;
             }
             $result[] = [
@@ -129,6 +129,7 @@ final class Catalog
                 'durations' => array_values($product['durations']),
                 'prices' => $product['prices'],
                 'usd_prices' => $product['usd_prices'],
+                'stock' => $product['stock'],
                 'features' => $product['features'],
                 'platform' => $product['platform'],
                 'access_mode' => $product['access_mode'],
@@ -136,6 +137,7 @@ final class Catalog
                 'demo_url' => $product['demo_enabled'] ? (string) $product['demo_url'] : '',
                 'download_url' => (string) $product['download_url'],
                 'featured' => $product['featured'],
+                'maintenance' => $product['maintenance'],
                 'sort_order' => $product['sort_order'],
                 'sold_count' => $product['sold_count'],
                 'image_url' => '/api/store/images/' . rawurlencode($key),
