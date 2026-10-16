@@ -18,7 +18,7 @@ No actual payment or reseller keys are stored in this repository. The PHP applic
 ## Deploy to the existing Railway service
 
 1. Keep the service connected to **only** `madangowdru17-star/ffpanelstore` and its `main` branch. Railway builds the PHP 8.3 + Apache container from the repository `Dockerfile` and binds Apache to Railway's runtime `PORT`.
-2. The Docker build explicitly disables the competing Apache MPM modules and enables only `mpm_prefork`, then fails the build if more than one MPM remains enabled. This addresses the reported `More than one MPM loaded` startup loop.
+2. The Docker build and every container start clear competing Apache MPM module links and enable only `mpm_prefork`. Startup checks `apache2ctl -M` and stops with a diagnostic if exactly one MPM is not loaded. This addresses the reported `More than one MPM loaded` startup loop and catches inherited image configuration before Apache begins its restart loop.
 3. Preserve the existing Railway variables. Payment and reseller values stay in protected Railway settings and are never committed to GitHub.
 4. Set `ADMIN_WEB_KEY` to a unique random value of at least 24 characters if it is not already configured.
 5. Keep the service's existing `DATABASE_PATH` **exactly unchanged** if it points at a live SQLite database. The application adds the wallet balance column with a zero default and creates new wallet tables; it does not replace the existing customer/order database.

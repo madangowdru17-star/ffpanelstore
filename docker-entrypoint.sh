@@ -1,6 +1,26 @@
 #!/bin/sh
 set -eu
 
+# Clear every active MPM at container startup, then enable only PHP's prefork MPM.
+rm -f /etc/apache2/mods-enabled/mpm_*.load /etc/apache2/mods-enabled/mpm_*.conf
+a2enmod mpm_prefork
+enabled_mpm_count=$(find /etc/apache2/mods-enabled -maxdepth 1 -name 'mpm_*.load' | wc -l)
+if [ "$enabled_mpm_count" -ne 1 ]; then
+  echo "Expected exactly one enabled Apache MPM; found $enabled_mpm_count." >&2
+  find /etc/apache2/mods-enabled -maxdepth 1 -name 'mpm_*' -ls >&2 || true
+  exit 1
+fi
+if ! apache2ctl -M >/tmp/apache-modules.txt 2>&1; then
+  cat /tmp/apache-modules.txt >&2
+  exit 1
+fi
+loaded_mpm_count=$(grep -Ec 'mpm_(event|worker|prefork)_module' /tmp/apache-modules.txt || true)
+if [ "$loaded_mpm_count" -ne 1 ]; then
+  echo "Expected exactly one loaded Apache MPM; found $loaded_mpm_count." >&2
+  cat /tmp/apache-modules.txt >&2
+  exit 1
+fi
+
 port="${PORT:-8080}"
 case "$port" in
   ''|*[!0-9]*) echo "PORT must be numeric" >&2; exit 1 ;;
