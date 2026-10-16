@@ -16,7 +16,7 @@ final class Homepage
         foreach (self::DEFAULTS as $key => $default) {
             $settings[$key] = Database::setting('home_' . $key, $default) ?? $default;
         }
-        return $settings + ['banners' => self::banners(false)];
+        return $settings + ['banners' => self::banners(false), 'binance' => self::publicBinanceConfig()];
     }
 
     public static function adminConfig(): array
@@ -25,7 +25,7 @@ final class Homepage
         foreach (self::DEFAULTS as $key => $default) {
             $settings[$key] = Database::setting('home_' . $key, $default) ?? $default;
         }
-        return $settings + ['banners' => self::banners(true)];
+        return $settings + ['banners' => self::banners(true), 'binance' => self::adminBinanceConfig()];
     }
 
     public static function updateSettings(array $body): array
@@ -123,6 +123,90 @@ final class Homepage
         header('Cache-Control: public, max-age=900');
         header('ETag: "' . (int) $row['updated_at'] . '"');
         echo $row['image'];
+    }
+
+    public static function publicBinanceConfig(): array
+    {
+        $asset = Database::row("SELECT 1 AS found FROM store_payment_assets WHERE kind='binance_qr'");
+        return [
+            'available' => (bool) $asset,
+            'instructions' => Database::setting('binance_instructions', 'Scan the QR code with Binance Pay. Send the exact USD amount shown, then submit your transaction ID and payment screenshot for manual review.') ?? '',
+            'qr_url' => $asset ? '/api/store/payments/binance/qr' : '',
+        ];
+    }
+
+    public static function adminBinanceConfig(): array
+    {
+        $asset = Database::row("SELECT filename,updated_at FROM store_payment_assets WHERE kind='binance_qr'");
+        return [
+            'available' => (bool) $asset,
+            'filename' => (string) ($asset['filename'] ?? ''),
+            'updated_at' => (int) ($asset['updated_at'] ?? 0),
+            'instructions' => Database::setting('binance_instructions', 'Scan the QR code with Binance Pay. Send the exact USD amount shown, then submit your transaction ID and payment screenshot for manual review.') ?? '',
+        ];
+    }
+
+    public static function updateBinanceSettings(array $body): array
+    {
+        if (array_diff(array_keys($body), ['instructions'])) {
+            throw new HttpError('Unsupported Binance payment setting.', 400);
+        }
+        $instructions = trim((string) ($body['instructions'] ?? ''));
+        if ($instructions === '' || mb_strlen($instructions) > 800) {
+            throw new HttpError('Payment instructions must be 1–800 characters.', 400);
+        }
+        Database::saveSetting('binance_instructions', $instructions);
+        return ['ok' => true, 'binance' => self::adminBinanceConfig()];
+    }
+
+    public static function uploadBinanceQr(): array
+    {
+        $file = $_FILES['image'] ?? null;
+        if (!is_array($file) || (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            throw new HttpError('Select the Binance Pay QR image to upload.', 400);
+        }
+        if ((int) $file['size'] < 1 || (int) $file['size'] > 6 * 1024 * 1024) {
+            throw new HttpError('Binance QR image must be no larger than 6 MB.', 400);
+        }
+        $bytes = file_get_contents((string) $file['tmp_name']);
+        $info = is_string($bytes) ? @getimagesizefromstring($bytes) : false;
+        $mime = is_array($info) ? strtolower((string) ($info['mime'] ?? '')) : '';
+        if (!in_array($mime, ['image/png', 'image/jpeg', 'image/webp'], true)) {
+            throw new HttpError('Upload a valid PNG, JPEG, or WebP Binance QR image.', 400);
+        }
+        $width = (int) ($info[0] ?? 0);
+        $height = (int) ($info[1] ?? 0);
+        if ($width < 1 || $height < 1 || $width * $height > 20000000) {
+            throw new HttpError('Binance QR image dimensions are invalid or too large.', 400);
+        }
+        $filename = substr(basename((string) ($file['name'] ?? 'binance-qr')), 0, 255);
+        $statement = Database::pdo()->prepare(
+            "INSERT INTO store_payment_assets(kind,content_type,filename,data,updated_at) VALUES('binance_qr',?,?,?,?) "
+            . 'ON CONFLICT(kind) DO UPDATE SET content_type=excluded.content_type,filename=excluded.filename,data=excluded.data,updated_at=excluded.updated_at'
+        );
+        $statement->bindValue(1, $mime);
+        $statement->bindValue(2, $filename);
+        $statement->bindValue(3, $bytes, PDO::PARAM_LOB);
+        $statement->bindValue(4, time(), PDO::PARAM_INT);
+        $statement->execute();
+        return ['ok' => true, 'binance' => self::adminBinanceConfig()];
+    }
+
+    public static function deleteBinanceQr(): void
+    {
+        Database::pdo()->prepare("DELETE FROM store_payment_assets WHERE kind='binance_qr'")->execute();
+    }
+
+    public static function binanceQr(): void
+    {
+        $row = Database::row("SELECT content_type,data,updated_at FROM store_payment_assets WHERE kind='binance_qr'");
+        if (!$row) {
+            throw new HttpError('Binance Pay QR is not configured.', 404);
+        }
+        header('Content-Type: ' . $row['content_type']);
+        header('Cache-Control: public, max-age=300');
+        header('ETag: "' . (int) $row['updated_at'] . '"');
+        echo $row['data'];
     }
 
     private static function banners(bool $admin): array

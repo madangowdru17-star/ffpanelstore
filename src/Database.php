@@ -131,6 +131,13 @@ CREATE TABLE IF NOT EXISTS store_home_banners (
     image BLOB,
     updated_at INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS store_payment_assets (
+    kind TEXT PRIMARY KEY,
+    content_type TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    data BLOB NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS store_fulfillment_attempts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id TEXT NOT NULL,
@@ -198,6 +205,25 @@ SQL);
             self::pdo()->exec("ALTER TABLE store_checkouts ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''");
         }
         self::pdo()->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_store_checkout_idempotency ON store_checkouts(account_id,idempotency_key) WHERE idempotency_key != ''");
+        $topupColumns = self::rows('PRAGMA table_info(store_wallet_topups)');
+        $existingTopupColumns = array_fill_keys(array_map(static fn(array $column): string => (string) $column['name'], $topupColumns), true);
+        $topupMigrations = [
+            'payment_method' => "TEXT NOT NULL DEFAULT 'upi'",
+            'amount_usd' => 'REAL NOT NULL DEFAULT 0',
+            'exchange_rate_inr' => 'REAL NOT NULL DEFAULT 0',
+            'proof_data' => 'BLOB',
+            'proof_content_type' => "TEXT NOT NULL DEFAULT ''",
+            'proof_filename' => "TEXT NOT NULL DEFAULT ''",
+            'proof_txid' => "TEXT NOT NULL DEFAULT ''",
+            'reviewed_at' => 'INTEGER NOT NULL DEFAULT 0',
+            'review_note' => "TEXT NOT NULL DEFAULT ''",
+        ];
+        foreach ($topupMigrations as $column => $definition) {
+            if (!isset($existingTopupColumns[$column])) {
+                self::pdo()->exec('ALTER TABLE store_wallet_topups ADD COLUMN ' . $column . ' ' . $definition);
+            }
+        }
+        self::pdo()->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_store_wallet_topups_proof_txid ON store_wallet_topups(proof_txid) WHERE proof_txid != ''");
     }
 
     public static function rows(string $sql, array $params = []): array

@@ -66,6 +66,10 @@ final class App
             Homepage::bannerImage((int) $match[1]);
             return;
         }
+        if ($method === 'GET' && $path === '/api/store/payments/binance/qr') {
+            Homepage::binanceQr();
+            return;
+        }
         if ($method === 'GET' && $path === '/api/store/session') {
             $account = Auth::current();
             self::json($account ? ['authenticated' => true, 'account' => Auth::publicAccount($account), 'csrf_token' => $account['csrf_token']] : ['authenticated' => false]);
@@ -98,6 +102,24 @@ final class App
             }
             Auth::requireCsrf($account);
             self::json(Wallet::createTopup((int) $account['id'], self::body()), 201);
+            return;
+        }
+        if ($method === 'POST' && $path === '/api/store/wallet/binance') {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in to create a Binance top-up.', 401);
+            }
+            Auth::requireCsrf($account);
+            self::json(Wallet::createBinanceTopup((int) $account['id'], self::body()), 201);
+            return;
+        }
+        if ($method === 'POST' && preg_match('#^/api/store/wallet/topups/([A-Za-z0-9_-]{4,80})/proof$#', $path, $match)) {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in to submit payment proof.', 401);
+            }
+            Auth::requireCsrf($account);
+            self::json(Wallet::submitBinanceProof((int) $account['id'], $match[1]));
             return;
         }
         if ($method === 'GET' && preg_match('#^/api/store/wallet/topups/([A-Za-z0-9_-]{4,80})/qr$#', $path, $match)) {
@@ -170,6 +192,19 @@ final class App
                 self::json(Homepage::updateSettings(self::body()));
                 return;
             }
+            if ($method === 'PUT' && $path === '/admin/api/payments/binance') {
+                self::json(Homepage::updateBinanceSettings(self::body()));
+                return;
+            }
+            if ($method === 'POST' && $path === '/admin/api/payments/binance/qr') {
+                self::json(Homepage::uploadBinanceQr());
+                return;
+            }
+            if ($method === 'DELETE' && $path === '/admin/api/payments/binance/qr') {
+                Homepage::deleteBinanceQr();
+                self::json(['ok' => true]);
+                return;
+            }
             if ($method === 'POST' && $path === '/admin/api/admin/password') {
                 self::json(Auth::changeAdminPassword(self::body()));
                 return;
@@ -207,6 +242,23 @@ final class App
             }
             if ($method === 'GET' && $path === '/admin/api/store/orders') {
                 self::adminOrders();
+                return;
+            }
+            if ($method === 'GET' && $path === '/admin/api/store/wallet/binance') {
+                self::json(['payments' => Wallet::adminBinanceTopups()]);
+                return;
+            }
+            if ($method === 'GET' && preg_match('#^/admin/api/store/wallet/binance/([A-Za-z0-9_-]{4,80})/proof$#', $path, $match)) {
+                $image = Wallet::adminBinanceProof($match[1]);
+                header('Content-Type: ' . $image['content_type']);
+                header('Cache-Control: no-store');
+                header('Content-Disposition: inline');
+                header('X-Content-Type-Options: nosniff');
+                echo $image['body'];
+                return;
+            }
+            if ($method === 'POST' && preg_match('#^/admin/api/store/wallet/binance/([A-Za-z0-9_-]{4,80})/review$#', $path, $match)) {
+                self::json(Wallet::reviewBinanceTopup($match[1], self::body()));
                 return;
             }
             if (preg_match('#^/admin/api/products/([a-z0-9_-]{2,60})(/image)?$#i', $path, $match)) {

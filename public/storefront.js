@@ -10,9 +10,9 @@ let activePaymentType = 'checkout';
 let pollTimer = null;
 let pendingProduct = null;
 let homeConfig = {};
-let selectedCategory = 'all';
-let selectedPlatform = 'all';
-let selectedAccess = 'all';
+let selectedStoreFilter = 'all';
+let ordersCache = [];
+let paymentHistoryCache = [];
 let activeSlide = 0;
 let carouselTimer = null;
 let detailProduct = null;
@@ -53,6 +53,7 @@ function toast(message, error = false) {
   toast.timer = setTimeout(() => node.classList.add('hidden'), 3800);
 }
 function showAccount() {
+  setProfileTab('profile');
   $('accountPanel').classList.add('show');
   $('accountPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   loadWallet();
@@ -81,23 +82,23 @@ function displayPrice(product, duration) {
   return money(product.prices && product.prices[duration], 'INR');
 }
 function renderFilterGroups() {
-  const categories = [...new Set(products.map(p => String(p.category || '').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
-  const platforms = [...new Set(products.map(p => String(p.platform || '').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
-  const chip = (group, value, label, active) => `<button class="filter-btn ${active ? 'active' : ''}" type="button" data-filter-group="${group}" data-filter-value="${escapeHtml(value)}">${escapeHtml(label)}</button>`;
-  $('categoryFilters').innerHTML = [chip('category','all','All products',selectedCategory==='all'), ...categories.map(x=>chip('category',x,x,selectedCategory===x))].join('');
-  $('platformFilters').innerHTML = [chip('platform','all','All platforms',selectedPlatform==='all'), ...platforms.map(x=>chip('platform',x,x,selectedPlatform===x))].join('');
-  $('accessFilters').innerHTML = [chip('access','all','Any access type',selectedAccess==='all'), chip('access','root','Root',selectedAccess==='root'), chip('access','non_root','Non-root',selectedAccess==='non_root')].join('');
+  document.querySelectorAll('[data-store-filter]').forEach(button => {
+    button.classList.toggle('active', button.dataset.storeFilter === selectedStoreFilter);
+  });
 }
 function renderProducts() {
   const query = $('search').value.trim().toLowerCase();
   const shown = products.filter(p => {
     const searchable = [p.name,p.category,p.platform,p.access_mode,p.description,...(p.features||[])].join(' ').toLowerCase();
-    return searchable.includes(query)
-      && (selectedCategory==='all' || p.category===selectedCategory)
-      && (selectedPlatform==='all' || p.platform===selectedPlatform)
-      && (selectedAccess==='all' || (p.access_mode||'all')===selectedAccess || (selectedAccess==='all' && (p.access_mode||'all')==='all'));
+    const access = String(p.access_mode || 'all').toLowerCase();
+    const isIos = [p.platform, p.category, p.name].some(value => /ios/i.test(String(value || '')));
+    const modeMatches = selectedStoreFilter === 'all'
+      || (selectedStoreFilter === 'ios' && isIos)
+      || (selectedStoreFilter === 'root' && (access === 'root' || access === 'all'))
+      || (selectedStoreFilter === 'non_root' && (access === 'non_root' || access === 'all'));
+    return searchable.includes(query) && modeMatches;
   });
-  $('productCount').textContent = String(products.length);
+  $('productCount').textContent = String(shown.length);
   if (!shown.length) { $('catalogGrid').innerHTML = '<div class="empty">No products match your search and filters.</div>'; return; }
   $('catalogGrid').innerHTML = shown.map(p => {
     const initials = escapeHtml(p.name.split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase());
@@ -131,6 +132,11 @@ async function loadHomepage() {
     $('heroSubtitle').textContent=data.hero_subtitle||'';
     $('announcement').textContent=data.announcement||'';
     document.title=`${shopName} | Digital products`;
+    const binanceReady = Boolean(data.binance?.available);
+    $('binanceTopupButton').disabled = !binanceReady;
+    $('binanceAvailability').textContent = binanceReady
+      ? 'Binance Pay is available. Payments require admin verification before INR wallet credit.'
+      : 'Binance Pay will appear here after the shop administrator uploads a Binance QR image.';
     const fallback=[
       ['Featured line-up','Explore products for your platform and choose the access period that works for you.'],
       ['Choose your access','Compare product details, demo videos, download links, and durations before checkout.'],
@@ -164,7 +170,7 @@ async function loadProducts() {
 }
 function updateAccountDisplay() {
   if (!account) return;
-  $('authOpen').textContent = account.display_name || account.email || 'My account';
+  $('authOpen').textContent = 'Profile';
   $('accountName').textContent = account.display_name || account.email || 'Shop customer';
   $('accountMeta').textContent = account.email || 'Shop account';
   $('profileDisplayName').value = account.display_name || '';
@@ -199,6 +205,8 @@ async function loadWallet() {
     const data = await request('/api/store/wallet');
     account.balance_inr = Number(data.balance_inr || 0);
     updateAccountDisplay();
+    paymentHistoryCache = data.payment_history || [];
+    renderPaymentHistory();
     const entries = data.transactions || [];
     $('walletTransactions').innerHTML = entries.length ? entries.map(t => {
       const positive = Number(t.amount_inr) >= 0;
@@ -212,9 +220,34 @@ async function loadOrders() {
   if (!account) return;
   try {
     const data = await request('/api/store/orders');
-    const rows = data.orders || [];
-    $('ordersList').innerHTML = rows.length ? rows.map(o => `<div class="order"><div><strong>${escapeHtml(o.product_name)}</strong><small>${escapeHtml(o.duration)} · ${escapeHtml(o.order_id)}</small></div><div>${escapeHtml(money(o.amount, 'INR'))}</div><div class="order-status">${escapeHtml(o.status)}</div><div class="order-key">${o.delivery_key ? escapeHtml(o.delivery_key) : '<span class="muted">Delivery is pending or under admin review.</span>'}</div></div>`).join('') : '<div class="empty">Your completed and pending orders will appear here.</div>';
+    ordersCache = data.orders || [];
+    renderKeyHistory();
+    renderPaymentHistory();
   } catch {}
+}
+function renderPaymentHistory() {
+  if (!$('paymentHistoryList')) return;
+  const topups = paymentHistoryCache.map(t => ({
+    type: t.payment_method === 'binance' ? 'Binance Pay top-up' : 'UPI wallet top-up',
+    reference: t.order_id, amount: Number(t.amount_inr || 0), usd: Number(t.amount_usd || 0),
+    status: t.status, date: Number(t.created_at || 0), txid: t.proof_txid || t.transaction_id || '', note: t.review_note || ''
+  }));
+  const orders = ordersCache.map(o => ({
+    type: o.transaction_id === 'WALLET' ? 'Wallet product purchase' : 'UPI product purchase',
+    reference: o.order_id, amount: Number(o.amount || 0), usd: 0, status: o.status,
+    date: Number(o.created_at || 0), txid: o.transaction_id === 'WALLET' ? '' : (o.transaction_id || '')
+  }));
+  const rows = [...topups, ...orders].sort((a,b) => b.date-a.date);
+  $('paymentHistoryList').innerHTML = rows.length ? rows.map(x => `<div class="history-row"><div><strong>${escapeHtml(x.type)}</strong><small>${escapeHtml(x.reference)} · ${x.date ? escapeHtml(new Date(x.date*1000).toLocaleString()) : '—'}</small>${x.txid?`<small>Transaction: ${escapeHtml(x.txid)}</small>`:''}${x.note?`<small>Review note: ${escapeHtml(x.note)}</small>`:''}</div><div>${escapeHtml(money(x.amount,'INR'))}${x.usd>0?`<small>Paid amount: ${escapeHtml(money(x.usd,'USD'))}</small>`:''}</div><div class="history-status">${escapeHtml(x.status)}</div></div>`).join('') : '<div class="empty">Payment history will appear here.</div>';
+}
+function renderKeyHistory() {
+  if (!$('keyHistoryList')) return;
+  $('keyHistoryList').innerHTML = ordersCache.length ? ordersCache.map(o => `<div class="history-row"><div><strong>${escapeHtml(o.product_name)}</strong><small>${escapeHtml(o.duration)} · ${escapeHtml(o.order_id)}</small><small>${o.created_at?escapeHtml(new Date(Number(o.created_at)*1000).toLocaleString()):'—'}</small></div><div>${escapeHtml(money(o.amount,'INR'))}</div><div class="history-status">${escapeHtml(o.status)}</div><div class="history-key">${o.delivery_key?escapeHtml(o.delivery_key):'<span class="muted">Key pending or under review.</span>'}</div></div>`).join('') : '<div class="empty">Your purchase keys will appear here after you place an order.</div>';
+}
+function setProfileTab(tab) {
+  const panes = { profile: 'profilePane', payments: 'paymentsPane', keys: 'keysPane' };
+  document.querySelectorAll('[data-profile-tab]').forEach(button => button.classList.toggle('active', button.dataset.profileTab === tab));
+  Object.entries(panes).forEach(([key,id]) => $(id)?.classList.toggle('active', key === tab));
 }
 async function authSubmit(event) {
   event.preventDefault();
@@ -308,6 +341,8 @@ async function startCheckout(key, duration) {
     });
     activePaymentType = 'checkout';
     activeOrder = data.order_id;
+    $('paymentSubtitle').textContent = 'Complete the UPI checkout. Your order will be fulfilled after payment is verified.';
+    $('binanceProofArea').classList.add('hidden');
     $('paymentDetails').innerHTML = `Order <strong>${escapeHtml(data.order_id)}</strong><br>${escapeHtml(data.product_name || products.find(p => p.key === key)?.name || key)} · ${escapeHtml(duration)}<br>Amount due in INR: <strong>${escapeHtml(money(data.amount_inr, 'INR'))}</strong>`;
     $('paymentLink').href = data.payment_url || '#';
     $('paymentLink').classList.toggle('hidden', !data.payment_url);
@@ -338,6 +373,8 @@ async function startTopup(event) {
     });
     activePaymentType = 'wallet';
     activeOrder = data.order_id;
+    $('paymentSubtitle').textContent = 'Complete the UPI checkout. Your wallet is credited after payment is verified.';
+    $('binanceProofArea').classList.add('hidden');
     $('paymentDetails').innerHTML = `Wallet top-up <strong>${escapeHtml(data.order_id)}</strong><br>Amount due in INR: <strong>${escapeHtml(money(data.amount_inr, 'INR'))}</strong>`;
     $('paymentLink').href = data.payment_url || '#';
     $('paymentLink').classList.toggle('hidden', !data.payment_url);
@@ -354,14 +391,89 @@ async function startTopup(event) {
     $('topupButton').disabled = false;
   }
 }
+async function startBinanceTopup(event) {
+  event.preventDefault();
+  $('topupError').textContent = '';
+  const amount = Number($('binanceAmount').value);
+  if (!Number.isFinite(amount) || amount < 0.52 || amount > 100) {
+    $('topupError').textContent = 'Binance top-ups must be between $0.52 and $100.00.';
+    return;
+  }
+  const button = $('binanceTopupButton');
+  button.disabled = true;
+  try {
+    const data = await request('/api/store/wallet/binance', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount_usd: amount })
+    });
+    activePaymentType = 'binance';
+    activeOrder = data.order_id;
+    $('paymentSubtitle').textContent = 'Pay the exact USD amount, then submit the transaction ID and screenshot for manual verification.';
+    $('paymentDetails').innerHTML = `Binance Pay top-up <strong>${escapeHtml(data.order_id)}</strong><br>Send: <strong>${escapeHtml(money(data.amount_usd,'USD'))}</strong><br>Wallet credit after approval: <strong>${escapeHtml(money(data.amount_inr,'INR'))}</strong><br>Rate locked for this request: 1 USD = ₹${Number(data.exchange_rate_inr).toFixed(4)}`;
+    $('paymentLink').classList.add('hidden');
+    $('paymentQr').src = data.qr_url;
+    $('paymentQr').style.display = 'block';
+    $('binanceInstructions').textContent = data.instructions || 'Pay the exact USD amount using Binance Pay.';
+    $('binanceProofArea').classList.remove('hidden');
+    $('binanceTxid').value = '';
+    $('binanceProof').value = '';
+    $('submitBinanceProof').disabled = false;
+    $('paymentStatus').textContent = 'After paying, submit your transaction ID and screenshot. Wallet credit requires admin verification.';
+    $('paymentModal').classList.remove('hidden');
+    clearInterval(pollTimer);
+    pollTimer = setInterval(pollStatus, 8000);
+  } catch (e) {
+    $('topupError').textContent = e.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+async function submitBinanceProof(event) {
+  event.preventDefault();
+  if (!activeOrder || activePaymentType !== 'binance') return;
+  const file = $('binanceProof').files?.[0];
+  if (!file) { $('paymentStatus').textContent = 'Choose the payment screenshot first.'; return; }
+  if (file.size > 5 * 1024 * 1024) { $('paymentStatus').textContent = 'Screenshot must be 5 MB or smaller.'; return; }
+  const form = new FormData();
+  form.append('txid', $('binanceTxid').value.trim());
+  form.append('proof', file, file.name);
+  $('submitBinanceProof').disabled = true;
+  try {
+    await request(`/api/store/wallet/topups/${encodeURIComponent(activeOrder)}/proof`, { method: 'POST', body: form });
+    $('binanceTxid').disabled = true;
+    $('binanceProof').disabled = true;
+    $('paymentStatus').textContent = 'Proof submitted. An administrator must verify the transfer before your INR wallet is credited.';
+    await pollStatus();
+  } catch (e) {
+    $('paymentStatus').textContent = e.message;
+    $('submitBinanceProof').disabled = false;
+  }
+}
 async function pollStatus() {
   if (!activeOrder) return;
   try {
-    const path = activePaymentType === 'wallet'
+    const path = ['wallet','binance'].includes(activePaymentType)
       ? `/api/store/wallet/topups/${encodeURIComponent(activeOrder)}`
       : `/api/store/checkouts/${encodeURIComponent(activeOrder)}`;
     const data = await request(path);
     const status = data.status;
+    if (activePaymentType === 'binance') {
+      $('paymentStatus').textContent = status === 'manual_pending' ? 'Payment request created. Pay the exact USD amount and submit your screenshot and transaction ID.'
+        : status === 'proof_submitted' ? 'Proof submitted. Waiting for the administrator to verify the transfer.'
+        : status === 'approved' ? 'Payment verified. Your INR wallet has been credited.'
+        : status === 'rejected' ? `This payment proof was rejected.${data.review_note?` ${String(data.review_note)}`:' Contact shop support if you believe this is an error.'}`
+        : 'Checking Binance payment review status…';
+      if (status === 'approved') {
+        clearInterval(pollTimer);
+        account.balance_inr = Number(data.balance_inr || 0);
+        await Promise.all([loadWallet(), syncSession()]);
+        toast(`Binance top-up approved: ${money(data.amount_inr,'INR')} credited.`);
+      } else if (status === 'rejected') {
+        clearInterval(pollTimer);
+        await loadWallet();
+      }
+      return;
+    }
     if (activePaymentType === 'wallet') {
       $('paymentStatus').textContent = status === 'complete' ? 'Payment verified — your wallet has been credited.'
         : status === 'failed' ? 'Payment was not completed.'
@@ -426,14 +538,18 @@ $('currencySelect').addEventListener('change', event => setCurrency(event.target
 $('heroPrev').addEventListener('click',()=>{clearInterval(carouselTimer);goSlide(activeSlide-1);carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500)});
 $('heroNext').addEventListener('click',()=>{clearInterval(carouselTimer);goSlide(activeSlide+1);carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500)});
 document.addEventListener('click',event=>{
-  const filter=event.target.closest('[data-filter-group]');
-  if(filter){const group=filter.dataset.filterGroup,value=filter.dataset.filterValue;if(group==='category')selectedCategory=value;if(group==='platform')selectedPlatform=value;if(group==='access')selectedAccess=value;renderFilterGroups();renderProducts();return}
+  const filter=event.target.closest('[data-store-filter]');
+  if(filter){selectedStoreFilter=filter.dataset.storeFilter;renderFilterGroups();renderProducts();return}
+  const profileTab=event.target.closest('[data-profile-tab]');
+  if(profileTab){setProfileTab(profileTab.dataset.profileTab);return}
   const dot=event.target.closest('[data-slide]');if(dot){clearInterval(carouselTimer);goSlide(Number(dot.dataset.slide));carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500);return}
   const card=event.target.closest('[data-open-product]');if(card)openProduct(card.dataset.openProduct);
 });
 $('checkPayment').addEventListener('click', pollStatus);
 $('profileForm').addEventListener('submit', saveProfile);
 $('topupForm').addEventListener('submit', startTopup);
+$('binanceTopupForm').addEventListener('submit', startBinanceTopup);
+$('binanceProofForm').addEventListener('submit', submitBinanceProof);
 $('payWalletButton').addEventListener('click', payWithWallet);
 $('payOnlineButton').addEventListener('click', () => {
   if (!pendingProduct) return;
