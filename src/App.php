@@ -7,6 +7,7 @@ final class App
     {
         try {
             Database::initialize();
+            Homepage::seedDefaultPaymentAssets();
             Catalog::ensureSeeded();
             Auth::bootstrapAdmin();
             header('X-Content-Type-Options: nosniff');
@@ -95,6 +96,10 @@ final class App
             Homepage::binanceQr();
             return;
         }
+        if ($method === 'GET' && $path === '/api/store/payments/usdt/qr') {
+            Homepage::usdtQr();
+            return;
+        }
         if ($method === 'GET' && $path === '/api/store/session') {
             $account = Auth::current();
             self::json($account ? ['authenticated' => true, 'account' => Auth::publicAccount($account), 'csrf_token' => $account['csrf_token']] : ['authenticated' => false]);
@@ -136,6 +141,15 @@ final class App
             }
             Auth::requireCsrf($account);
             self::json(Wallet::createBinanceTopup((int) $account['id'], self::body()), 201);
+            return;
+        }
+        if ($method === 'POST' && $path === '/api/store/wallet/usdt') {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in to create a USDT top-up.', 401);
+            }
+            Auth::requireCsrf($account);
+            self::json(Wallet::createUsdtTopup((int) $account['id'], self::body()), 201);
             return;
         }
         if ($method === 'POST' && preg_match('#^/api/store/wallet/topups/([A-Za-z0-9_-]{4,80})/proof$#', $path, $match)) {
@@ -180,6 +194,19 @@ final class App
         }
         if ($method === 'POST' && $path === '/api/store/checkout') {
             self::checkout();
+            return;
+        }
+        if ($method === 'POST' && $path === '/api/store/checkout/crypto') {
+            self::checkoutCrypto();
+            return;
+        }
+        if ($method === 'POST' && preg_match('#^/api/store/checkouts/([A-Za-z0-9_-]{4,80})/proof$#', $path, $match)) {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in to submit payment proof.', 401);
+            }
+            Auth::requireCsrf($account);
+            self::submitCryptoCheckoutProof($match[1], (int) $account['id']);
             return;
         }
         if ($method === 'POST' && $path === '/api/store/checkout/wallet') {
@@ -230,6 +257,19 @@ final class App
                 self::json(['ok' => true]);
                 return;
             }
+            if ($method === 'PUT' && $path === '/admin/api/payments/usdt') {
+                self::json(Homepage::updateUsdtSettings(self::body()));
+                return;
+            }
+            if ($method === 'POST' && $path === '/admin/api/payments/usdt/qr') {
+                self::json(Homepage::uploadUsdtQr());
+                return;
+            }
+            if ($method === 'DELETE' && $path === '/admin/api/payments/usdt/qr') {
+                Homepage::deleteUsdtQr();
+                self::json(['ok' => true]);
+                return;
+            }
             if ($method === 'POST' && $path === '/admin/api/admin/password') {
                 self::json(Auth::changeAdminPassword(self::body()));
                 return;
@@ -271,6 +311,40 @@ final class App
             }
             if ($method === 'GET' && $path === '/admin/api/store/wallet/binance') {
                 self::json(['payments' => Wallet::adminBinanceTopups()]);
+                return;
+            }
+            if ($method === 'GET' && $path === '/admin/api/store/wallet/crypto') {
+                self::json(['payments' => Wallet::adminCryptoTopups()]);
+                return;
+            }
+            if ($method === 'GET' && preg_match('#^/admin/api/store/wallet/crypto/([A-Za-z0-9_-]{4,80})/proof$#', $path, $match)) {
+                $image = Wallet::adminCryptoProof($match[1]);
+                header('Content-Type: ' . $image['content_type']);
+                header('Cache-Control: no-store');
+                header('Content-Disposition: inline');
+                header('X-Content-Type-Options: nosniff');
+                echo $image['body'];
+                return;
+            }
+            if ($method === 'POST' && preg_match('#^/admin/api/store/wallet/crypto/([A-Za-z0-9_-]{4,80})/review$#', $path, $match)) {
+                self::json(Wallet::reviewCryptoTopup($match[1], self::body()));
+                return;
+            }
+            if ($method === 'GET' && $path === '/admin/api/store/checkout-crypto') {
+                self::adminCryptoCheckouts();
+                return;
+            }
+            if ($method === 'GET' && preg_match('#^/admin/api/store/checkout-crypto/([A-Za-z0-9_-]{4,80})/proof$#', $path, $match)) {
+                $image = self::adminCryptoCheckoutProof($match[1]);
+                header('Content-Type: ' . $image['content_type']);
+                header('Cache-Control: no-store');
+                header('Content-Disposition: inline');
+                header('X-Content-Type-Options: nosniff');
+                echo $image['body'];
+                return;
+            }
+            if ($method === 'POST' && preg_match('#^/admin/api/store/checkout-crypto/([A-Za-z0-9_-]{4,80})/review$#', $path, $match)) {
+                self::reviewCryptoCheckout($match[1], self::body());
                 return;
             }
             if ($method === 'GET' && preg_match('#^/admin/api/store/wallet/binance/([A-Za-z0-9_-]{4,80})/proof$#', $path, $match)) {
@@ -479,6 +553,171 @@ final class App
         ], 201);
     }
 
+    private static function checkoutCrypto(): void
+    {
+        $account = Auth::current();
+        if (!$account) {
+            throw new HttpError('Sign in to place an order.', 401);
+        }
+        Auth::requireCsrf($account);
+        $body = self::body();
+        $key = strtolower(trim((string) ($body['product_key'] ?? '')));
+        $duration = trim((string) ($body['duration'] ?? ''));
+        $method = strtolower(trim((string) ($body['payment_method'] ?? '')));
+        $idempotencyKey = trim((string) ($body['idempotency_key'] ?? ''));
+        if (!preg_match('/^[a-z0-9_-]{2,60}$/', $key)) {
+            throw new HttpError('Choose a valid product.', 400);
+        }
+        if (!in_array($method, ['binance', 'usdt_bep20'], true)) {
+            throw new HttpError('Choose Binance Pay USD or USDT on BNB Smart Chain (BEP20).', 400);
+        }
+        if (!preg_match('/^[A-Za-z0-9_-]{16,64}$/', $idempotencyKey)) {
+            throw new HttpError('Checkout session expired. Please start the purchase again.', 400);
+        }
+        $product = Catalog::effective($key);
+        if (empty($product['enabled']) || !empty($product['maintenance'])) {
+            throw new HttpError('This product is currently unavailable.', 409);
+        }
+        if (!in_array($duration, $product['durations'] ?? [], true)) {
+            throw new HttpError('Choose a valid product duration.', 400);
+        }
+        $amount = self::price((string) ($product['prices'][$duration] ?? ''));
+        if ($amount === null || $amount <= 0) {
+            throw new HttpError('The selected INR price is not configured.', 409);
+        }
+        $stock = $product['stock'][$duration] ?? null;
+        if ($stock !== null && is_numeric(str_replace(',', '', (string) $stock)) && (float) str_replace(',', '', (string) $stock) <= 0) {
+            throw new HttpError('This option is currently out of stock.', 409);
+        }
+        $config = $method === 'usdt_bep20' ? Homepage::publicUsdtConfig() : Homepage::publicBinanceConfig();
+        if (empty($config['available'])) {
+            throw new HttpError('This crypto payment option is not available right now.', 503);
+        }
+        $rate = Wallet::cryptoExchangeRateInr();
+        $amountUsd = round($amount / $rate, 2);
+        if ($amountUsd < 0.01 || $amountUsd > 100) {
+            throw new HttpError('This product price is outside the supported crypto checkout range (0.01–100 USD equivalent).', 400);
+        }
+        $pdo = Database::pdo();
+        $now = time();
+        $orderId = 'CRY' . strtoupper(bin2hex(random_bytes(8)));
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $existing = Database::row('SELECT * FROM store_checkouts WHERE account_id=? AND idempotency_key=?', [(int) $account['id'], $idempotencyKey]);
+            if ($existing) {
+                $proof = Database::row('SELECT payment_method,amount_usd,exchange_rate_inr,status FROM store_checkout_crypto_proofs WHERE order_id=?', [(string) $existing['order_id']]);
+                if (!$proof || (string) $proof['payment_method'] !== $method) {
+                    throw new HttpError('This checkout session is already in use. Start the purchase again.', 409);
+                }
+                $pdo->exec('COMMIT');
+                self::json([
+                    'ok' => true, 'order_id' => (string) $existing['order_id'], 'product_name' => (string) $existing['product_name'],
+                    'duration' => (string) $existing['duration'], 'amount_inr' => (float) $existing['amount_inr'],
+                    'amount_usd' => (float) $proof['amount_usd'], 'exchange_rate_inr' => (float) $proof['exchange_rate_inr'],
+                    'payment_method' => $method, 'qr_url' => (string) $config['qr_url'], 'instructions' => (string) $config['instructions'],
+                    'status' => (string) $existing['status'],
+                ], 200);
+                return;
+            }
+            $now = time();
+            $apiDuration = (string) ($product['api_duration'][$duration] ?? $duration);
+            $pdo->prepare(
+                'INSERT INTO store_checkouts(order_id,account_id,product_key,product_id,product_name,duration,api_duration,amount_inr,provider_order_id,payment_url,idempotency_key,status,transaction_id,created_at,updated_at) '
+                . 'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+            )->execute([
+                $orderId, (int) $account['id'], $key, (string) ($product['id'] ?? ''), (string) ($product['name'] ?? $key),
+                $duration, $apiDuration, $amount, '', '', $idempotencyKey, 'manual_pending', '', $now, $now,
+            ]);
+            $pdo->prepare(
+                "INSERT INTO store_checkout_crypto_proofs(order_id,payment_method,amount_usd,exchange_rate_inr,status,proof_txid,created_at,updated_at) VALUES(?,?,?,?,'manual_pending','',?,?)"
+            )->execute([$orderId, $method, $amountUsd, $rate, $now, $now]);
+            $pdo->exec('COMMIT');
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
+            }
+            throw $e;
+        }
+        self::json([
+            'ok' => true, 'order_id' => $orderId, 'product_name' => (string) ($product['name'] ?? $key),
+            'duration' => $duration, 'amount_inr' => $amount, 'amount_usd' => $amountUsd,
+            'exchange_rate_inr' => $rate, 'payment_method' => $method, 'qr_url' => (string) $config['qr_url'],
+            'instructions' => (string) $config['instructions'], 'status' => 'manual_pending',
+        ], 201);
+    }
+
+    private static function submitCryptoCheckoutProof(string $orderId, int $accountId): void
+    {
+        $txid = trim((string) ($_POST['txid'] ?? ''));
+        if (mb_strlen($txid) < 4 || mb_strlen($txid) > 180) {
+            throw new HttpError('Enter a transaction ID between 4 and 180 characters.', 400);
+        }
+        $file = $_FILES['proof'] ?? null;
+        if (!is_array($file) || (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            throw new HttpError('Upload a payment screenshot to submit proof.', 400);
+        }
+        if ((int) $file['size'] < 1 || (int) $file['size'] > 5 * 1024 * 1024) {
+            throw new HttpError('Payment screenshot must be no larger than 5 MB.', 400);
+        }
+        $bytes = file_get_contents((string) $file['tmp_name']);
+        $info = is_string($bytes) ? @getimagesizefromstring($bytes) : false;
+        $mime = is_array($info) ? strtolower((string) ($info['mime'] ?? '')) : '';
+        if (!in_array($mime, ['image/png', 'image/jpeg', 'image/webp'], true)) {
+            throw new HttpError('Upload a valid PNG, JPEG, or WebP screenshot.', 400);
+        }
+        $width = (int) ($info[0] ?? 0);
+        $height = (int) ($info[1] ?? 0);
+        if ($width < 1 || $height < 1 || $width * $height > 20000000) {
+            throw new HttpError('Screenshot dimensions are invalid or too large.', 400);
+        }
+        if (Database::row('SELECT 1 AS found FROM store_wallet_topups WHERE proof_txid=?', [$txid])) {
+            throw new HttpError('That transaction ID has already been submitted.', 409);
+        }
+        $filename = substr(basename((string) ($file['name'] ?? 'payment-proof')), 0, 255);
+        $pdo = Database::pdo();
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $order = Database::row(
+                'SELECT c.status,p.status AS proof_status FROM store_checkouts c JOIN store_checkout_crypto_proofs p ON p.order_id=c.order_id WHERE c.order_id=? AND c.account_id=?',
+                [$orderId, $accountId]
+            );
+            if (!$order) {
+                throw new HttpError('Crypto product checkout not found.', 404);
+            }
+            if ((string) $order['status'] !== 'manual_pending' || (string) $order['proof_status'] !== 'manual_pending') {
+                throw new HttpError('Proof has already been submitted or this request was reviewed.', 409);
+            }
+            $proof = $pdo->prepare("UPDATE store_checkout_crypto_proofs SET status='proof_submitted',proof_txid=?,proof_data=?,proof_content_type=?,proof_filename=?,updated_at=? WHERE order_id=? AND status='manual_pending'");
+            $proof->bindValue(1, $txid);
+            $proof->bindValue(2, $bytes, PDO::PARAM_LOB);
+            $proof->bindValue(3, $mime);
+            $proof->bindValue(4, $filename);
+            $proof->bindValue(5, time(), PDO::PARAM_INT);
+            $proof->bindValue(6, $orderId);
+            $proof->execute();
+            if ($proof->rowCount() !== 1) {
+                throw new HttpError('Proof could not be saved because the request changed.', 409);
+            }
+            $pdo->prepare("UPDATE store_checkouts SET status='proof_submitted',transaction_id=?,updated_at=? WHERE order_id=? AND account_id=? AND status='manual_pending'")
+                ->execute([$txid, time(), $orderId, $accountId]);
+            $pdo->exec('COMMIT');
+        } catch (PDOException $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
+            }
+            if ((int) ($e->errorInfo[1] ?? 0) === 19) {
+                throw new HttpError('That transaction ID has already been submitted.', 409);
+            }
+            throw $e;
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
+            }
+            throw $e;
+        }
+        self::json(['ok' => true, 'order_id' => $orderId, 'status' => 'proof_submitted']);
+    }
+
     private static function checkoutFromWallet(): void
     {
         $account = Auth::current();
@@ -616,10 +855,19 @@ final class App
                 }
             }
         }
+        $cryptoProof = Database::row(
+            'SELECT payment_method,amount_usd,exchange_rate_inr,proof_txid,review_note FROM store_checkout_crypto_proofs WHERE order_id=?',
+            [$orderId]
+        ) ?? [];
         self::json([
             'order_id' => $orderId, 'status' => (string) $row['status'],
             'delivery_key' => (string) ($row['delivery_key'] ?? ''), 'amount_inr' => (float) $row['amount_inr'],
             'product_name' => (string) $row['product_name'], 'duration' => (string) $row['duration'],
+            'payment_method' => (string) ($cryptoProof['payment_method'] ?? ''),
+            'amount_usd' => (float) ($cryptoProof['amount_usd'] ?? 0),
+            'exchange_rate_inr' => (float) ($cryptoProof['exchange_rate_inr'] ?? 0),
+            'proof_txid' => (string) ($cryptoProof['proof_txid'] ?? ''),
+            'review_note' => (string) ($cryptoProof['review_note'] ?? ''),
         ]);
     }
 
@@ -650,12 +898,94 @@ final class App
             throw new HttpError('Sign in to view your orders.', 401);
         }
         $rows = Database::rows(
-            "SELECT order_id,product_name,duration,amount,status,delivery_key,created_at,transaction_id FROM store_orders WHERE account_id=? "
-            . "UNION ALL SELECT order_id,product_name,duration,amount_inr AS amount,status,'' AS delivery_key,created_at,transaction_id FROM store_checkouts WHERE account_id=? AND status!='complete' "
-            . 'ORDER BY created_at DESC LIMIT 100',
+            "SELECT o.order_id,o.product_name,o.duration,o.amount,o.status,o.delivery_key,o.created_at,o.transaction_id,COALESCE(p.payment_method,'upi') AS payment_method FROM store_orders o LEFT JOIN store_checkout_crypto_proofs p ON p.order_id=o.order_id WHERE o.account_id=? "
+            . "UNION ALL SELECT c.order_id,c.product_name,c.duration,c.amount_inr AS amount,c.status,'' AS delivery_key,c.created_at,c.transaction_id,COALESCE(p.payment_method,'upi') AS payment_method FROM store_checkouts c LEFT JOIN store_checkout_crypto_proofs p ON p.order_id=c.order_id WHERE c.account_id=? AND c.status!='complete' "
+            . 'ORDER BY 7 DESC LIMIT 100',
             [(int) $account['id'], (int) $account['id']]
         );
         self::json(['orders' => $rows]);
+    }
+
+    private static function adminCryptoCheckouts(): void
+    {
+        $rows = Database::rows(
+            'SELECT c.order_id,c.account_id,a.email,a.display_name,c.product_name,c.duration,c.amount_inr,c.status,c.transaction_id,c.created_at,c.updated_at,'
+            . 'p.payment_method,p.amount_usd,p.exchange_rate_inr,p.proof_txid,p.proof_filename,p.proof_content_type,p.status AS proof_status,p.reviewed_at,p.review_note '
+            . 'FROM store_checkouts c JOIN store_checkout_crypto_proofs p ON p.order_id=c.order_id '
+            . 'LEFT JOIN store_accounts a ON a.id=c.account_id ORDER BY c.created_at DESC LIMIT 200'
+        );
+        self::json(['payments' => $rows]);
+    }
+
+    private static function adminCryptoCheckoutProof(string $orderId): array
+    {
+        $row = Database::row(
+            'SELECT proof_content_type,proof_data FROM store_checkout_crypto_proofs WHERE order_id=?',
+            [$orderId]
+        );
+        if (!$row || empty($row['proof_data'])) {
+            throw new HttpError('Payment proof not found.', 404);
+        }
+        return ['content_type' => (string) $row['proof_content_type'], 'body' => $row['proof_data']];
+    }
+
+    private static function reviewCryptoCheckout(string $orderId, array $body): void
+    {
+        $status = strtolower(trim((string) ($body['status'] ?? '')));
+        if (!in_array($status, ['approved', 'rejected'], true)) {
+            throw new HttpError('Review status must be approved or rejected.', 400);
+        }
+        if (empty($body['confirm_payment_checked'])) {
+            throw new HttpError('Confirm that the crypto payment was checked in the receiving account before reviewing.', 409);
+        }
+        $note = trim((string) ($body['note'] ?? ''));
+        if ($status === 'rejected' && $note === '') {
+            $note = 'Payment was not verified in the receiving account.';
+        }
+        if (mb_strlen($note) > 240) {
+            throw new HttpError('Review note must be 240 characters or fewer.', 400);
+        }
+        $pdo = Database::pdo();
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $row = Database::row(
+                'SELECT c.*,p.payment_method,p.amount_usd,p.exchange_rate_inr,p.proof_txid,p.proof_data,p.status AS proof_status '
+                . 'FROM store_checkouts c JOIN store_checkout_crypto_proofs p ON p.order_id=c.order_id WHERE c.order_id=?',
+                [$orderId]
+            );
+            if (!$row || !in_array((string) $row['payment_method'], ['binance', 'usdt_bep20'], true)) {
+                throw new HttpError('Crypto product checkout not found.', 404);
+            }
+            if ((string) $row['status'] !== 'proof_submitted' || (string) $row['proof_status'] !== 'proof_submitted' || empty($row['proof_data']) || trim((string) $row['proof_txid']) === '') {
+                throw new HttpError('A submitted screenshot and transaction ID are required before review.', 409);
+            }
+            $now = time();
+            $updateProof = $pdo->prepare("UPDATE store_checkout_crypto_proofs SET status=?,reviewed_at=?,review_note=?,updated_at=? WHERE order_id=? AND status='proof_submitted'");
+            $updateProof->execute([$status, $now, $note, $now, $orderId]);
+            if ($updateProof->rowCount() !== 1) {
+                throw new HttpError('This crypto product payment has already been reviewed.', 409);
+            }
+            $checkoutStatus = $status === 'approved' ? 'wallet_paid' : 'rejected';
+            $pdo->prepare("UPDATE store_checkouts SET status=?,transaction_id=?,updated_at=? WHERE order_id=? AND status='proof_submitted'")
+                ->execute([$checkoutStatus, (string) $row['proof_txid'], $now, $orderId]);
+            $pdo->exec('COMMIT');
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
+            }
+            throw $e;
+        }
+        if ($status === 'approved') {
+            $order = Database::row('SELECT * FROM store_checkouts WHERE order_id=?', [$orderId]);
+            $delivery = self::deliverCheckout($order ?? [], (string) ($row['proof_txid'] ?? 'CRYPTO'));
+            self::json([
+                'ok' => true, 'status' => 'approved', 'order_id' => $orderId,
+                'fulfillment_status' => (string) ($delivery['status'] ?? 'pending'),
+                'delivery_key' => (string) ($delivery['key'] ?? ''),
+            ]);
+            return;
+        }
+        self::json(['ok' => true, 'status' => 'rejected', 'order_id' => $orderId]);
     }
 
     private static function adminAccounts(): void

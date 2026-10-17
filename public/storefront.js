@@ -117,13 +117,12 @@ function renderProducts() {
     const initials = escapeHtml(p.name.split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase());
     const firstDuration = (p.durations||[])[0];
     const firstPrice = firstDuration ? displayPrice(p,firstDuration) : 'Price unavailable';
-    const access = p.access_mode==='root'?'Root':p.access_mode==='non_root'?'Non-root':'Root + non-root';
     const sold = Number(p.sold_count||0);
     const detailUrl=`/product/${encodeURIComponent(p.key)}`;
     const maintenance=Boolean(p.maintenance);
     const firstStock=firstDuration!==undefined&&p.stock&&p.stock[firstDuration]!==undefined?numberValue(p.stock[firstDuration]):null;
     const outOfStock=firstStock!==null&&firstStock<=0;
-    return `<article class="product reference-product" data-product-url="${escapeHtml(detailUrl)}"><a class="product-image" href="${escapeHtml(detailUrl)}" aria-label="View ${escapeHtml(p.name)} details"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div><div class="tag-row"><span class="product-tag">${escapeHtml(p.platform||p.category||'Digital')}</span><span class="product-tag">${escapeHtml(access)}</span></div></a><div class="product-body"><a class="reference-product-title" href="${escapeHtml(detailUrl)}" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</a><div class="reference-product-meta">${escapeHtml(p.platform||p.category||'Digital access')}${sold>0?` · ${sold.toLocaleString()} sold`:''}</div><span class="reference-price">${escapeHtml(firstPrice)}</span><div class="reference-card-actions"><a class="button setup-button ${p.download_url?'':'is-unavailable'}" aria-label="${p.download_url?'Open file and setup instructions':'Setup instructions are not configured'}" ${p.download_url?`href="${escapeHtml(p.download_url)}" target="_blank" rel="noopener noreferrer"`:'aria-disabled="true" title="No setup link is configured"'}>${p.download_url?'▣ SETUP':'NO SETUP'}</a><button class="button buy-button ${maintenance?'is-maintenance':''}" type="button" aria-label="${maintenance?'Product under maintenance':outOfStock?'Product out of stock':'Buy now'}" data-detail-open="${escapeHtml(p.key)}" ${maintenance||outOfStock?'disabled':''}>${maintenance?'⚒ MAINT.':outOfStock?'SOLD OUT':'🛒 BUY'}</button></div></div></article>`;
+    return `<article class="product reference-product" data-product-url="${escapeHtml(detailUrl)}"><a class="product-image" href="${escapeHtml(detailUrl)}" aria-label="View ${escapeHtml(p.name)} details"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div></a><div class="product-body"><a class="reference-product-title" href="${escapeHtml(detailUrl)}" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</a><div class="reference-product-meta">${sold>0?`${sold.toLocaleString()} sold`:'Digital access'}</div><span class="reference-price">${escapeHtml(firstPrice)}</span><div class="reference-card-actions"><a class="button setup-button ${p.download_url?'':'is-unavailable'}" aria-label="${p.download_url?'Open file and setup instructions':'Setup instructions are not configured'}" ${p.download_url?`href="${escapeHtml(p.download_url)}" target="_blank" rel="noopener noreferrer"`:'aria-disabled="true" title="No setup link is configured"'}>${p.download_url?'▣ SETUP':'NO SETUP'}</a><button class="button buy-button ${maintenance?'is-maintenance':''}" type="button" aria-label="${maintenance?'Product under maintenance':outOfStock?'Product out of stock':'Buy now'}" data-detail-open="${escapeHtml(p.key)}" ${maintenance||outOfStock?'disabled':''}>${maintenance?'⚒ MAINT.':outOfStock?'SOLD OUT':'🛒 BUY'}</button></div></div></article>`;
   }).join('');
 }
 function openProduct(key) {
@@ -341,6 +340,47 @@ async function payWithWallet() {
     $('payWalletButton').disabled = false;
   }
 }
+async function startCryptoProductCheckout(method) {
+  if (!pendingProduct) return;
+  const selected = pendingProduct;
+  const button = $(method === 'binance' ? 'payBinanceCheckoutButton' : 'payUsdtCheckoutButton');
+  button.disabled = true;
+  $('purchaseChoiceError').textContent = '';
+  try {
+    const data = await request('/api/store/checkout/crypto', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_key: selected.key, duration: selected.duration, payment_method: method, idempotency_key: `${selected.idempotencyKey}_${method}` })
+    });
+    $('purchaseChoiceModal').classList.add('hidden');
+    pendingProduct = null;
+    activePaymentType = 'crypto_checkout';
+    activeOrder = data.order_id;
+    const label = method === 'usdt_bep20' ? 'USDT · BNB Smart Chain (BEP20)' : 'Binance Pay · USD';
+    const unit = method === 'usdt_bep20' ? 'USDT' : 'USD';
+    $('paymentSubtitle').textContent = 'Send the exact crypto amount. Submit the transaction ID and screenshot; order delivery starts only after admin verification.';
+    $('paymentDetails').innerHTML = `${escapeHtml(data.product_name)} · ${escapeHtml(data.duration)}<br>${escapeHtml(label)} order <strong>${escapeHtml(data.order_id)}</strong><br>Send exactly <strong>${Number(data.amount_usd).toFixed(2)} ${unit}</strong><br>Product total: ${escapeHtml(money(data.amount_inr, 'INR'))}<br>Locked quote: 1 USD = ₹${Number(data.exchange_rate_inr).toFixed(4)}`;
+    $('paymentLink').classList.add('hidden');
+    $('paymentQr').src = data.qr_url;
+    $('paymentQr').style.display = 'block';
+    $('binanceInstructions').textContent = (method === 'usdt_bep20' ? 'NETWORK: BNB Smart Chain (BEP20) only. Do not send using another network. ' : '') + (data.instructions || 'Pay the exact amount shown, then submit your transaction ID and screenshot for admin verification.');
+    $('binanceProofForm').reset();
+    $('binanceTxid').disabled = false;
+    $('binanceProof').disabled = false;
+    $('submitBinanceProof').disabled = false;
+    $('binanceProofArea').classList.remove('hidden');
+    $('paymentStatus').textContent = data.status === 'proof_submitted' ? 'Proof already submitted. Waiting for admin review.' : 'After paying, submit your transaction ID and screenshot.';
+    if (data.status === 'proof_submitted') $('binanceProofForm').classList.add('hidden');
+    else $('binanceProofForm').classList.remove('hidden');
+    $('paymentModal').classList.remove('hidden');
+    clearInterval(pollTimer);
+    await pollStatus();
+    pollTimer = setInterval(pollStatus, 8000);
+    await loadOrders();
+  } catch (error) {
+    $('purchaseChoiceError').textContent = error.message;
+  } finally { button.disabled = false; }
+}
+
 async function startCheckout(key, duration) {
   try {
     const data = await request('/api/store/checkout', {
@@ -438,7 +478,7 @@ async function startBinanceTopup(event) {
 }
 async function submitBinanceProof(event) {
   event.preventDefault();
-  if (!activeOrder || activePaymentType !== 'binance') return;
+  if (!activeOrder || !['binance', 'crypto_checkout'].includes(activePaymentType)) return;
   const file = $('binanceProof').files?.[0];
   if (!file) { $('paymentStatus').textContent = 'Choose the payment screenshot first.'; return; }
   if (file.size > 5 * 1024 * 1024) { $('paymentStatus').textContent = 'Screenshot must be 5 MB or smaller.'; return; }
@@ -447,10 +487,15 @@ async function submitBinanceProof(event) {
   form.append('proof', file, file.name);
   $('submitBinanceProof').disabled = true;
   try {
-    await request(`/api/store/wallet/topups/${encodeURIComponent(activeOrder)}/proof`, { method: 'POST', body: form });
+    const proofPath = activePaymentType === 'crypto_checkout'
+      ? `/api/store/checkouts/${encodeURIComponent(activeOrder)}/proof`
+      : `/api/store/wallet/topups/${encodeURIComponent(activeOrder)}/proof`;
+    await request(proofPath, { method: 'POST', body: form });
     $('binanceTxid').disabled = true;
     $('binanceProof').disabled = true;
-    $('paymentStatus').textContent = 'Proof submitted. An administrator must verify the transfer before your INR wallet is credited.';
+    $('paymentStatus').textContent = activePaymentType === 'crypto_checkout'
+      ? 'Proof submitted. The product order is held for admin verification; delivery starts only after approval.'
+      : 'Proof submitted. An administrator must verify the transfer before your INR wallet is credited.';
     await pollStatus();
   } catch (e) {
     $('paymentStatus').textContent = e.message;
@@ -495,6 +540,13 @@ async function pollStatus() {
       } else if (['failed', 'amount_review'].includes(status)) clearInterval(pollTimer);
       return;
     }
+    if (activePaymentType === 'crypto_checkout' && ['manual_pending', 'proof_submitted', 'rejected'].includes(status)) {
+      $('paymentStatus').textContent = status === 'manual_pending' ? 'Crypto order created. Pay the exact amount and submit the transaction ID and screenshot.'
+        : status === 'proof_submitted' ? 'Proof submitted. Waiting for an administrator to verify the crypto payment before product delivery.'
+        : `Crypto payment proof rejected.${data.review_note ? ` ${String(data.review_note)}` : ' Please contact shop support if you believe this is an error.'}`;
+      if (status === 'rejected') clearInterval(pollTimer);
+      return;
+    }
     $('paymentStatus').textContent = status === 'complete' ? 'Payment verified — your order key is shown below.'
       : status === 'failed' ? 'Payment was not completed. You can start a new checkout.'
       : status === 'paid_delivery_failed' ? 'Payment received; delivery needs administrator review.'
@@ -506,7 +558,7 @@ async function pollStatus() {
       $('paymentDetails').innerHTML = `Order <strong>${escapeHtml(data.order_id)}</strong><br>${escapeHtml(data.product_name)} · ${escapeHtml(data.duration)}<br>Delivery key: <strong>${escapeHtml(data.delivery_key)}</strong>`;
       await loadOrders();
       toast('Payment confirmed. Your order is ready.');
-    } else if (['failed', 'paid_delivery_failed', 'delivery_unknown', 'amount_review'].includes(status)) clearInterval(pollTimer);
+    } else if (['failed', 'paid_delivery_failed', 'delivery_unknown', 'amount_review', 'rejected'].includes(status)) clearInterval(pollTimer);
   } catch {
     $('paymentStatus').textContent = 'Could not check status right now. Try again shortly.';
   }
@@ -568,6 +620,8 @@ $('payOnlineButton').addEventListener('click', () => {
   pendingProduct = null;
   startCheckout(selected.key, selected.duration);
 });
+$('payBinanceCheckoutButton').addEventListener('click', () => startCryptoProductCheckout('binance'));
+$('payUsdtCheckoutButton').addEventListener('click', () => startCryptoProductCheckout('usdt_bep20'));
 $('logoutButton').addEventListener('click', async () => {
   try { await request('/api/store/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch {}
   account = null;

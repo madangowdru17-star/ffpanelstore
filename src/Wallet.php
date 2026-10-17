@@ -103,37 +103,49 @@ final class Wallet
 
     public static function createBinanceTopup(int $accountId, array $body): array
     {
+        return self::createManualCryptoTopup($accountId, $body, 'binance');
+    }
+
+    public static function createUsdtTopup(int $accountId, array $body): array
+    {
+        return self::createManualCryptoTopup($accountId, $body, 'usdt_bep20');
+    }
+
+    private static function createManualCryptoTopup(int $accountId, array $body, string $method): array
+    {
+        $methodName = $method === 'usdt_bep20' ? 'USDT' : 'Binance';
         $raw = $body['amount_usd'] ?? null;
         if (!is_scalar($raw) || !is_numeric((string) $raw)) {
-            throw new HttpError('Enter a valid Binance amount in USD.', 400);
+            throw new HttpError('Enter a valid ' . $methodName . ' amount.', 400);
         }
         $amountUsd = round((float) $raw, 2);
         if (!is_finite($amountUsd) || $amountUsd < 0.52 || $amountUsd > 100) {
-            throw new HttpError('Binance top-ups must be between $0.52 and $100.00.', 400);
+            throw new HttpError($methodName . ' top-ups must be between 0.52 and 100.00.', 400);
         }
-        $config = Homepage::publicBinanceConfig();
+        $config = $method === 'usdt_bep20' ? Homepage::publicUsdtConfig() : Homepage::publicBinanceConfig();
         if (empty($config['available'])) {
-            throw new HttpError('Binance Pay is not ready yet. The shop administrator must upload its QR image.', 503);
+            throw new HttpError($methodName . ' payment QR is not ready. The shop administrator must upload its QR image.', 503);
         }
         $inrPerUsd = self::usdToInrRate();
         $amountInr = round($amountUsd * $inrPerUsd, 2);
         if ($amountInr <= 0 || $amountInr > 50000) {
-            throw new HttpError('This Binance amount is outside the supported wallet top-up range.', 400);
+            throw new HttpError('This ' . $methodName . ' amount is outside the supported wallet top-up range.', 400);
         }
-        $orderId = 'BNZ' . strtoupper(bin2hex(random_bytes(8)));
+        $orderId = ($method === 'usdt_bep20' ? 'USD' : 'BNZ') . strtoupper(bin2hex(random_bytes(8)));
         $now = time();
         Database::pdo()->prepare(
             'INSERT INTO store_wallet_topups(order_id,account_id,amount_inr,provider_order_id,payment_url,status,transaction_id,created_at,updated_at,payment_method,amount_usd,exchange_rate_inr) '
-            . 'VALUES(?,?,?,\'\',\'\',\'manual_pending\',\'\',?,?,?,?,?)'
-        )->execute([$orderId, $accountId, $amountInr, $now, $now, 'binance', $amountUsd, $inrPerUsd]);
+            . "VALUES(?,?,?,'','','manual_pending','',?,?,?,?,?)"
+        )->execute([$orderId, $accountId, $amountInr, $now, $now, $method, $amountUsd, $inrPerUsd]);
         return [
             'ok' => true,
             'order_id' => $orderId,
             'amount_usd' => $amountUsd,
             'amount_inr' => $amountInr,
             'exchange_rate_inr' => $inrPerUsd,
-            'qr_url' => '/api/store/payments/binance/qr?v=' . $now,
+            'qr_url' => (string) $config['qr_url'],
             'instructions' => (string) $config['instructions'],
+            'payment_method' => $method,
             'status' => 'manual_pending',
         ];
     }
@@ -141,8 +153,8 @@ final class Wallet
     public static function submitBinanceProof(int $accountId, string $orderId): array
     {
         $row = Database::row('SELECT status,payment_method FROM store_wallet_topups WHERE order_id=? AND account_id=?', [$orderId, $accountId]);
-        if (!$row || $row['payment_method'] !== 'binance') {
-            throw new HttpError('Binance top-up not found.', 404);
+        if (!$row || !in_array((string) $row['payment_method'], ['binance', 'usdt_bep20'], true)) {
+            throw new HttpError('Manual crypto top-up not found.', 404);
         }
         if ($row['status'] !== 'manual_pending') {
             throw new HttpError('Proof has already been submitted or this request was reviewed.', 409);
@@ -172,7 +184,7 @@ final class Wallet
         $filename = substr(basename((string) ($file['name'] ?? 'payment-proof')), 0, 255);
         $statement = Database::pdo()->prepare(
             "UPDATE store_wallet_topups SET status='proof_submitted',proof_data=?,proof_content_type=?,proof_filename=?,proof_txid=?,transaction_id=?,updated_at=? "
-            . "WHERE order_id=? AND account_id=? AND payment_method='binance' AND status='manual_pending'"
+            . "WHERE order_id=? AND account_id=? AND payment_method IN ('binance','usdt_bep20') AND status='manual_pending'"
         );
         $statement->bindValue(1, $bytes, PDO::PARAM_LOB);
         $statement->bindValue(2, $mime);
@@ -186,7 +198,7 @@ final class Wallet
             $statement->execute();
         } catch (PDOException $e) {
             if ((int) ($e->errorInfo[1] ?? 0) === 19) {
-                throw new HttpError('That Binance transaction ID has already been submitted.', 409);
+                throw new HttpError('That crypto transaction ID has already been submitted.', 409);
             }
             throw $e;
         }
@@ -207,15 +219,41 @@ final class Wallet
 
     public static function adminBinanceTopups(): array
     {
+        return self::adminCryptoTopupsForMethods(['binance']);
+    }
+
+    public static function adminCryptoTopups(): array
+    {
+        return self::adminCryptoTopupsForMethods(['binance', 'usdt_bep20']);
+    }
+
+    private static function adminCryptoTopupsForMethods(array $methods): array
+    {
+        $placeholders = implode(',', array_fill(0, count($methods), '?'));
         return Database::rows(
-            "SELECT t.order_id,t.account_id,a.email,a.display_name,t.amount_usd,t.amount_inr,t.exchange_rate_inr,t.status,t.proof_txid,t.proof_filename,t.proof_content_type,t.created_at,t.updated_at,t.reviewed_at,t.review_note "
-            . "FROM store_wallet_topups t LEFT JOIN store_accounts a ON a.id=t.account_id WHERE t.payment_method='binance' ORDER BY t.created_at DESC LIMIT 200"
+            'SELECT t.order_id,t.account_id,a.email,a.display_name,t.payment_method,t.amount_usd,t.amount_inr,t.exchange_rate_inr,t.status,t.proof_txid,t.proof_filename,t.proof_content_type,t.created_at,t.updated_at,t.reviewed_at,t.review_note '
+            . 'FROM store_wallet_topups t LEFT JOIN store_accounts a ON a.id=t.account_id WHERE t.payment_method IN (' . $placeholders . ') ORDER BY t.created_at DESC LIMIT 200',
+            $methods
         );
     }
 
     public static function adminBinanceProof(string $orderId): array
     {
-        $row = Database::row("SELECT proof_content_type,proof_data FROM store_wallet_topups WHERE order_id=? AND payment_method='binance'", [$orderId]);
+        return self::adminCryptoProofForMethods($orderId, ['binance']);
+    }
+
+    public static function adminCryptoProof(string $orderId): array
+    {
+        return self::adminCryptoProofForMethods($orderId, ['binance', 'usdt_bep20']);
+    }
+
+    private static function adminCryptoProofForMethods(string $orderId, array $methods): array
+    {
+        $placeholders = implode(',', array_fill(0, count($methods), '?'));
+        $row = Database::row(
+            'SELECT proof_content_type,proof_data FROM store_wallet_topups WHERE order_id=? AND payment_method IN (' . $placeholders . ')',
+            array_merge([$orderId], $methods)
+        );
         if (!$row || empty($row['proof_data'])) {
             throw new HttpError('Payment proof not found.', 404);
         }
@@ -224,16 +262,26 @@ final class Wallet
 
     public static function reviewBinanceTopup(string $orderId, array $body): array
     {
+        return self::reviewCryptoTopupWithMethods($orderId, $body, ['binance']);
+    }
+
+    public static function reviewCryptoTopup(string $orderId, array $body): array
+    {
+        return self::reviewCryptoTopupWithMethods($orderId, $body, ['binance', 'usdt_bep20']);
+    }
+
+    private static function reviewCryptoTopupWithMethods(string $orderId, array $body, array $methods): array
+    {
         $status = strtolower(trim((string) ($body['status'] ?? '')));
         if (!in_array($status, ['approved', 'rejected'], true)) {
             throw new HttpError('Review status must be approved or rejected.', 400);
         }
         if (empty($body['confirm_payment_checked'])) {
-            throw new HttpError('Confirm that the Binance payment was checked in the receiving account before reviewing.', 409);
+            throw new HttpError('Confirm that the payment was checked in the receiving account before reviewing.', 409);
         }
         $note = trim((string) ($body['note'] ?? ''));
         if ($status === 'rejected' && $note === '') {
-            $note = 'Payment was not verified in the receiving Binance account.';
+            $note = 'Payment was not verified in the receiving account.';
         }
         if (mb_strlen($note) > 240) {
             throw new HttpError('Review note must be 240 characters or fewer.', 400);
@@ -241,18 +289,18 @@ final class Wallet
         $pdo = Database::pdo();
         $pdo->exec('BEGIN IMMEDIATE');
         try {
-            $row = Database::row("SELECT * FROM store_wallet_topups WHERE order_id=? AND payment_method='binance'", [$orderId]);
-            if (!$row) {
-                throw new HttpError('Binance top-up not found.', 404);
+            $row = Database::row('SELECT * FROM store_wallet_topups WHERE order_id=?', [$orderId]);
+            if (!$row || !in_array((string) $row['payment_method'], $methods, true)) {
+                throw new HttpError('Manual crypto top-up not found.', 404);
             }
             if ((string) $row['status'] !== 'proof_submitted' || empty($row['proof_data']) || trim((string) $row['proof_txid']) === '') {
                 throw new HttpError('A submitted screenshot and transaction ID are required before review.', 409);
             }
             $now = time();
-            $changed = $pdo->prepare("UPDATE store_wallet_topups SET status=?,reviewed_at=?,review_note=?,updated_at=? WHERE order_id=? AND payment_method='binance' AND status='proof_submitted'");
+            $changed = $pdo->prepare("UPDATE store_wallet_topups SET status=?,reviewed_at=?,review_note=?,updated_at=? WHERE order_id=? AND status='proof_submitted'");
             $changed->execute([$status, $now, $note, $now, $orderId]);
             if ($changed->rowCount() !== 1) {
-                throw new HttpError('This Binance request has already been reviewed.', 409);
+                throw new HttpError('This crypto payment request has already been reviewed.', 409);
             }
             $balance = null;
             if ($status === 'approved') {
@@ -262,9 +310,13 @@ final class Wallet
                     throw new HttpError('Customer account no longer exists.', 404);
                 }
                 $balance = round((float) $account['balance_inr'], 2);
-                $description = sprintf('Verified Binance Pay top-up: $%.2f USD · TXID %s', (float) $row['amount_usd'], mb_substr((string) $row['proof_txid'], 0, 100));
+                $methodName = (string) $row['payment_method'] === 'usdt_bep20' ? 'USDT BEP20' : 'Binance Pay';
+                $unit = (string) $row['payment_method'] === 'usdt_bep20' ? 'USDT' : 'USD';
+                $description = sprintf('Verified %s top-up: %.2f %s · TXID %s', $methodName, (float) $row['amount_usd'], $unit, mb_substr((string) $row['proof_txid'], 0, 100));
+                $referencePrefix = (string) $row['payment_method'] === 'usdt_bep20' ? 'USDT:' : 'BINANCE:';
+                $transactionKind = (string) $row['payment_method'] === 'usdt_bep20' ? 'usdt_credit' : 'binance_credit';
                 $pdo->prepare('INSERT INTO store_wallet_transactions(account_id,kind,amount_inr,balance_after,reference_id,description,created_at) VALUES(?,?,?,?,?,?,?)')
-                    ->execute([(int) $row['account_id'], 'binance_credit', (float) $row['amount_inr'], $balance, 'BINANCE:' . $orderId, $description, $now]);
+                    ->execute([(int) $row['account_id'], $transactionKind, (float) $row['amount_inr'], $balance, $referencePrefix . $orderId, $description, $now]);
             }
             $pdo->exec('COMMIT');
             return ['ok' => true, 'status' => $status, 'order_id' => $orderId, 'balance_inr' => $balance];
@@ -274,6 +326,11 @@ final class Wallet
             }
             throw $e;
         }
+    }
+
+    public static function cryptoExchangeRateInr(): float
+    {
+        return self::usdToInrRate();
     }
 
     private static function usdToInrRate(): float

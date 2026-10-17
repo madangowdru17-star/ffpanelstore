@@ -36,17 +36,18 @@
   };
 
   const bindMenu=()=>{
-    const toggle=document.getElementById('shopMenuToggle'),menu=document.getElementById('shopQuickMenu');
-    if(!toggle||!menu)return;
-    toggle.addEventListener('click',event=>{
-      event.stopPropagation();const open=menu.classList.toggle('hidden');
-      toggle.setAttribute('aria-expanded',String(!open));toggle.classList.toggle('is-open',!open);
-    });
-    document.addEventListener('click',event=>{
-      if(!event.target.closest('#shopQuickMenu,#shopMenuToggle')){
-        menu.classList.add('hidden');toggle.setAttribute('aria-expanded','false');toggle.classList.remove('is-open');
-      }
-    });
+    const toggle=document.getElementById('shopMenuToggle'),menu=document.getElementById('shopQuickMenu'),backdrop=document.getElementById('shopMenuBackdrop');
+    if(!toggle||!menu||!backdrop)return;
+    const signIn=document.getElementById('menuSignIn'),signOut=document.getElementById('menuSignOut');
+    const close=()=>{menu.classList.add('hidden');backdrop.classList.add('hidden');menu.setAttribute('aria-hidden','true');backdrop.setAttribute('aria-hidden','true');toggle.setAttribute('aria-expanded','false');toggle.classList.remove('is-open');document.body.classList.remove('menu-open')};
+    const open=async()=>{
+      menu.classList.remove('hidden');backdrop.classList.remove('hidden');menu.setAttribute('aria-hidden','false');backdrop.setAttribute('aria-hidden','false');toggle.setAttribute('aria-expanded','true');toggle.classList.add('is-open');document.body.classList.add('menu-open');
+      try{const response=await fetch('/api/store/session',{credentials:'same-origin'}),data=await response.json();const name=document.getElementById('menuProfileName'),email=document.getElementById('menuProfileEmail');if(data.authenticated){name.textContent=data.account?.display_name||'Shop customer';email.textContent=data.account?.email||'';signIn?.classList.add('hidden');signOut?.classList.remove('hidden')}else{name.textContent='Your shop account';email.textContent='Sign in to see your account';if(signIn){signIn.classList.remove('hidden');signIn.href='/login?next='+encodeURIComponent(location.pathname+location.search)}signOut?.classList.add('hidden')}}catch{}
+    };
+    toggle.addEventListener('click',event=>{event.stopPropagation();menu.classList.contains('hidden')?open():close()});
+    backdrop.addEventListener('click',close);menu.querySelectorAll('[data-menu-close]').forEach(button=>button.addEventListener('click',close));
+    document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!menu.classList.contains('hidden')){close();toggle.focus()}});
+    signOut?.addEventListener('click',async()=>{signOut.disabled=true;try{await fetch('/api/store/logout',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'})}finally{location.href='/'}});
   };
 
   const bindCurrency=()=>{

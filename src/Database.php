@@ -93,6 +93,23 @@ CREATE TABLE IF NOT EXISTS store_checkouts (
     FOREIGN KEY(account_id) REFERENCES store_accounts(id)
 );
 CREATE INDEX IF NOT EXISTS idx_store_checkouts_account ON store_checkouts(account_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS store_checkout_crypto_proofs (
+    order_id TEXT PRIMARY KEY,
+    payment_method TEXT NOT NULL,
+    amount_usd REAL NOT NULL,
+    exchange_rate_inr REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'manual_pending',
+    proof_txid TEXT NOT NULL DEFAULT '',
+    proof_data BLOB,
+    proof_content_type TEXT NOT NULL DEFAULT '',
+    proof_filename TEXT NOT NULL DEFAULT '',
+    reviewed_at INTEGER NOT NULL DEFAULT 0,
+    review_note TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(order_id) REFERENCES store_checkouts(order_id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_store_checkout_crypto_txid ON store_checkout_crypto_proofs(proof_txid) WHERE proof_txid != '';
 CREATE TABLE IF NOT EXISTS store_orders (
     order_id TEXT PRIMARY KEY,
     account_id INTEGER NOT NULL,
