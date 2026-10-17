@@ -1,6 +1,10 @@
 'use strict';
 
 const $ = id => document.getElementById(id);
+const storedCurrency = () => {
+  try { return localStorage.getItem('hex_shop_currency') === 'USD' ? 'USD' : 'INR'; }
+  catch { return 'INR'; }
+};
 let products = [];
 let account = null;
 let csrfToken = '';
@@ -16,7 +20,7 @@ let paymentHistoryCache = [];
 let activeSlide = 0;
 let carouselTimer = null;
 let detailProduct = null;
-let currency = localStorage.getItem('hex_shop_currency') === 'USD' ? 'USD' : 'INR';
+let currency = storedCurrency();
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -63,6 +67,11 @@ function showAccount() {
 }
 function openAuth() {
   if (account) return showAccount();
+  const googleLink = $('googleAuthLink');
+  if (googleLink) {
+    const next = pendingProduct ? `/product/${encodeURIComponent(pendingProduct.key)}` : '/account';
+    googleLink.href = `/auth/google?next=${encodeURIComponent(next)}`;
+  }
   $('authModal').classList.remove('hidden');
 }
 function setAuthMode(mode) {
@@ -114,7 +123,7 @@ function renderProducts() {
     const maintenance=Boolean(p.maintenance);
     const firstStock=firstDuration!==undefined&&p.stock&&p.stock[firstDuration]!==undefined?numberValue(p.stock[firstDuration]):null;
     const outOfStock=firstStock!==null&&firstStock<=0;
-    return `<article class="product reference-product" data-product-url="${escapeHtml(detailUrl)}"><a class="product-image" href="${escapeHtml(detailUrl)}" aria-label="View ${escapeHtml(p.name)} details"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div><div class="tag-row"><span class="product-tag">${escapeHtml(p.platform||p.category||'Digital')}</span><span class="product-tag">${escapeHtml(access)}</span></div></a><div class="product-body"><a class="reference-product-title" href="${escapeHtml(detailUrl)}" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</a><div class="reference-product-meta">${escapeHtml(p.platform||p.category||'Digital access')}${sold>0?` · ${sold.toLocaleString()} sold`:''}</div><span class="reference-price">${escapeHtml(firstPrice)}</span><div class="reference-card-actions"><a class="button setup-button ${p.download_url?'':'is-unavailable'}" ${p.download_url?`href="${escapeHtml(p.download_url)}" target="_blank" rel="noopener noreferrer"`:'aria-disabled="true" title="No setup link is configured"'}>▣ FILE &amp; SETUP</a><button class="button buy-button ${maintenance?'is-maintenance':''}" type="button" data-detail-open="${escapeHtml(p.key)}" ${maintenance||outOfStock?'disabled':''}>${maintenance?'⚒ MAINTENANCE':outOfStock?'OUT OF STOCK':'🛒 BUY NOW'}</button></div></div></article>`;
+    return `<article class="product reference-product" data-product-url="${escapeHtml(detailUrl)}"><a class="product-image" href="${escapeHtml(detailUrl)}" aria-label="View ${escapeHtml(p.name)} details"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div><div class="tag-row"><span class="product-tag">${escapeHtml(p.platform||p.category||'Digital')}</span><span class="product-tag">${escapeHtml(access)}</span></div></a><div class="product-body"><a class="reference-product-title" href="${escapeHtml(detailUrl)}" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</a><div class="reference-product-meta">${escapeHtml(p.platform||p.category||'Digital access')}${sold>0?` · ${sold.toLocaleString()} sold`:''}</div><span class="reference-price">${escapeHtml(firstPrice)}</span><div class="reference-card-actions"><a class="button setup-button ${p.download_url?'':'is-unavailable'}" aria-label="${p.download_url?'Open file and setup instructions':'Setup instructions are not configured'}" ${p.download_url?`href="${escapeHtml(p.download_url)}" target="_blank" rel="noopener noreferrer"`:'aria-disabled="true" title="No setup link is configured"'}>${p.download_url?'▣ SETUP':'NO SETUP'}</a><button class="button buy-button ${maintenance?'is-maintenance':''}" type="button" aria-label="${maintenance?'Product under maintenance':outOfStock?'Product out of stock':'Buy now'}" data-detail-open="${escapeHtml(p.key)}" ${maintenance||outOfStock?'disabled':''}>${maintenance?'⚒ MAINT.':outOfStock?'SOLD OUT':'🛒 BUY'}</button></div></div></article>`;
   }).join('');
 }
 function openProduct(key) {
@@ -519,7 +528,7 @@ async function saveProfile(event) {
 }
 function setCurrency(value) {
   currency = value === 'USD' ? 'USD' : 'INR';
-  localStorage.setItem('hex_shop_currency', currency);
+  try { localStorage.setItem('hex_shop_currency', currency); } catch {}
   $('currencySelect').value = currency;
   renderProducts();
   if(detailProduct && !$('productModal').classList.contains('hidden'))openProduct(detailProduct.key);

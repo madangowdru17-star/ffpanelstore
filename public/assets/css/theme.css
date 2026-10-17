@@ -79,3 +79,16 @@ body.page-exit{opacity:0;transform:translateY(-5px) scale(.995);filter:blur(1px)
 .reference-header .menu-trigger.is-open{transform:rotate(90deg)}
 .hx-bottom-nav a:active{transform:scale(.94)}
 .button:active,.hx-button:active{transform:scale(.97)}
+
+
+/* Accessible phone controls: retain three product columns without shrinking labels to unreadable sizes. */
+body:has(#catalog) .reference-card-actions .button{min-height:43px;padding:8px 4px;font-size:9px;line-height:1.15;letter-spacing:0;white-space:normal}
+body:has(#catalog) .hx-bottom-nav a{min-height:56px;font-size:9px}
+body:has(#catalog) .hx-nav-icon{font-size:20px}
+body:has(#catalog) .filter-btn{font-size:10px}
+@media(max-width:650px){body:has(#catalog) .reference-card-actions .button{min-height:42px;padding:7px 3px;font-size:8.5px}body:has(#catalog) .hx-bottom-nav a{min-height:56px;font-size:9px}body:has(#catalog) .hx-nav-icon{font-size:20px}}
+@media(max-width:360px){body:has(#catalog) .reference-card-actions .button{min-height:42px;font-size:8px}body:has(#catalog) .filter-btn{font-size:8.5px}}
+
+/* Keep compact three-column cards readable on the smallest supported phones. */
+@media(max-width:650px){body:has(#catalog) .reference-card-actions .button{font-size:9px}body:has(#catalog) .filter-btn{font-size:9.5px}}
+@media(max-width:360px){body:has(#catalog) .reference-card-actions .button{font-size:9px}body:has(#catalog) .filter-btn{font-size:9px}}
