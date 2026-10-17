@@ -85,7 +85,9 @@ function displayPrice(product, duration) {
 }
 function renderFilterGroups() {
   document.querySelectorAll('[data-store-filter]').forEach(button => {
-    button.classList.toggle('active', button.dataset.storeFilter === selectedStoreFilter);
+    const active = button.dataset.storeFilter === selectedStoreFilter;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
   });
 }
 function renderProducts() {
@@ -536,7 +538,7 @@ $('heroPrev').addEventListener('click',()=>{clearInterval(carouselTimer);goSlide
 $('heroNext').addEventListener('click',()=>{clearInterval(carouselTimer);goSlide(activeSlide+1);carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500)});
 document.addEventListener('click',event=>{
   const filter=event.target.closest('[data-store-filter]');
-  if(filter){selectedStoreFilter=filter.dataset.storeFilter;renderFilterGroups();renderProducts();return}
+  if(filter){selectedStoreFilter=filter.dataset.storeFilter;filter.classList.remove('tab-tap');void filter.offsetWidth;filter.classList.add('tab-tap');$('catalogGrid').classList.add('is-switching');renderFilterGroups();renderProducts();setTimeout(()=>$('catalogGrid')?.classList.remove('is-switching'),420);return}
   const profileTab=event.target.closest('[data-profile-tab]');
   if(profileTab){setProfileTab(profileTab.dataset.profileTab);return}
   const dot=event.target.closest('[data-slide]');if(dot){clearInterval(carouselTimer);goSlide(Number(dot.dataset.slide));carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500);return}

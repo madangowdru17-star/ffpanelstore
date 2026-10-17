@@ -10,10 +10,11 @@ final class GoogleOAuth
 
     public static function start(): never
     {
+        $nextPath = self::safeNext((string) ($_GET['next'] ?? '/account'));
         $clientId = trim((string) (getenv('GOOGLE_CLIENT_ID') ?: ''));
         $redirectUri = self::redirectUri();
         if ($clientId === '' || !filter_var($redirectUri, FILTER_VALIDATE_URL) || !str_starts_with($redirectUri, 'https://')) {
-            self::redirect('/login?google=not_configured');
+            self::redirect('/login?google=not_configured&next=' . rawurlencode($nextPath));
         }
 
         $state = self::base64url(random_bytes(32));
@@ -29,8 +30,8 @@ final class GoogleOAuth
         ]);
         $pdo = Database::pdo();
         $pdo->prepare('DELETE FROM store_google_oauth_states WHERE expires_at < ?')->execute([time()]);
-        $pdo->prepare('INSERT INTO store_google_oauth_states(state_hash,code_verifier,browser_hash,expires_at,created_at) VALUES(?,?,?,?,?)')
-            ->execute([hash('sha256', $state), $verifier, hash('sha256', $browserNonce), time() + 600, time()]);
+        $pdo->prepare('INSERT INTO store_google_oauth_states(state_hash,code_verifier,browser_hash,next_path,expires_at,created_at) VALUES(?,?,?,?,?,?)')
+            ->execute([hash('sha256', $state), $verifier, hash('sha256', $browserNonce), $nextPath, time() + 600, time()]);
 
         $query = http_build_query([
             'client_id' => $clientId,
@@ -62,7 +63,7 @@ final class GoogleOAuth
             self::redirect('/login?google=expired');
         }
         $pdo = Database::pdo();
-        $statement = $pdo->prepare('SELECT code_verifier,browser_hash,expires_at FROM store_google_oauth_states WHERE state_hash=?');
+        $statement = $pdo->prepare('SELECT code_verifier,browser_hash,next_path,expires_at FROM store_google_oauth_states WHERE state_hash=?');
         $statement->execute([$stateHash]);
         $saved = $statement->fetch(PDO::FETCH_ASSOC);
         $pdo->prepare('DELETE FROM store_google_oauth_states WHERE state_hash=?')->execute([$stateHash]);
@@ -111,7 +112,7 @@ final class GoogleOAuth
             // Do not leak provider payloads, tokens, or account details to the browser.
             self::redirect('/login?google=failed');
         }
-        self::redirect('/account?google=success');
+        self::redirect(self::safeNext((string) ($saved['next_path'] ?? '/account')));
     }
 
     private static function redirectUri(): string
@@ -173,6 +174,16 @@ final class GoogleOAuth
             throw new RuntimeException('Invalid Google ID-token response.');
         }
         return $data;
+    }
+
+    private static function safeNext(string $path): string
+    {
+        if ($path === '' || strlen($path) > 2000 || !str_starts_with($path, '/')
+            || str_starts_with($path, '//') || str_contains($path, '\\')
+            || preg_match('/[\x00-\x20\x7f]/', $path)) {
+            return '/account';
+        }
+        return $path;
     }
 
     private static function base64url(string $value): string

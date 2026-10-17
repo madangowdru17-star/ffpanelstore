@@ -223,6 +223,16 @@ SQL);
         if (!$hasBrowserHash) {
             self::pdo()->exec("ALTER TABLE store_google_oauth_states ADD COLUMN browser_hash TEXT NOT NULL DEFAULT ''");
         }
+        $hasNextPath = false;
+        foreach (self::rows('PRAGMA table_info(store_google_oauth_states)') as $column) {
+            if (($column['name'] ?? '') === 'next_path') {
+                $hasNextPath = true;
+                break;
+            }
+        }
+        if (!$hasNextPath) {
+            self::pdo()->exec("ALTER TABLE store_google_oauth_states ADD COLUMN next_path TEXT NOT NULL DEFAULT '/account'");
+        }
         self::pdo()->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_store_accounts_google_sub ON store_accounts(google_sub) WHERE google_sub != ''");
         self::pdo()->exec('DELETE FROM store_google_oauth_states WHERE expires_at < ' . time());
         $checkoutColumns = self::rows('PRAGMA table_info(store_checkouts)');

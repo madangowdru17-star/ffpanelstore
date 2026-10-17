@@ -273,12 +273,13 @@ final class Auth
         $https = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
             || strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https'
             || getenv('RAILWAY_PUBLIC_DOMAIN');
+        $secure = (bool) $https;
         return [
             'expires' => $expires,
             'path' => '/',
-            'secure' => (bool) $https,
+            'secure' => $secure,
             'httponly' => true,
-            'samesite' => 'Lax',
+            'samesite' => $secure ? 'None' : 'Lax',
         ];
     }
 
