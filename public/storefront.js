@@ -115,6 +115,17 @@ function renderFilterGroups() {
     button.setAttribute('aria-pressed', String(active));
   });
 }
+function platformBadge(product) {
+  const access = String(product.access_mode || '').trim().toLowerCase().replace(/[- ]/g, '_');
+  const searchable = [product.platform, product.category, product.name].filter(Boolean).join(' ').toLowerCase();
+  let mark = '', label = '';
+  if (/ios/.test(searchable)) { mark = 'apple-logo.svg'; label = 'iOS'; }
+  else if (access === 'root') { mark = 'kitsune-mask-source.png'; label = 'Root'; }
+  else if (access === 'non_root') { mark = 'android-robot.svg'; label = 'Non-root'; }
+  else if (/android/.test(searchable)) { mark = 'android-robot.svg'; label = 'Android'; }
+  if (!mark) return '';
+  return `<span class="product-platform-badge" role="img" aria-label="${label} platform" title="${label}"><img class="hx-platform-mark platform-mark-${mark.startsWith('apple') ? 'apple' : mark.startsWith('kitsune') ? 'kitsune' : 'android'}" src="/assets/brands/${mark}" alt="" aria-hidden="true"></span>`;
+}
 function renderProducts() {
   const query = $('search').value.trim().toLowerCase();
   const shown = products.filter(p => {
@@ -136,9 +147,10 @@ function renderProducts() {
     const sold = Number(p.sold_count||0);
     const detailUrl=`/product/${encodeURIComponent(p.key)}`;
     const maintenance=Boolean(p.maintenance);
+    const platform=platformBadge(p);
     const firstStock=firstDuration!==undefined&&p.stock&&p.stock[firstDuration]!==undefined?numberValue(p.stock[firstDuration]):null;
     const outOfStock=firstStock!==null&&firstStock<=0;
-    return `<article class="product reference-product" data-product-url="${escapeHtml(detailUrl)}"><a class="product-image" href="${escapeHtml(detailUrl)}" aria-label="View ${escapeHtml(p.name)} details"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div></a><div class="product-body"><a class="reference-product-title" href="${escapeHtml(detailUrl)}" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</a><div class="reference-product-meta">${sold>0?`${sold.toLocaleString()} sold`:'Digital access'}</div><span class="reference-price">${escapeHtml(firstPrice)}</span><div class="reference-card-actions"><a class="button setup-button ${p.download_url?'':'is-unavailable'}" aria-label="${p.download_url?'Open file and setup instructions':'Setup instructions are not configured'}" ${p.download_url?`href="${escapeHtml(p.download_url)}" target="_blank" rel="noopener noreferrer"`:'aria-disabled="true" title="No setup link is configured"'}>${p.download_url?'▣ SETUP':'NO SETUP'}</a><button class="button buy-button ${maintenance?'is-maintenance':''}" type="button" aria-label="${maintenance?'Product under maintenance':outOfStock?'Product out of stock':'Buy now'}" data-detail-open="${escapeHtml(p.key)}" ${maintenance||outOfStock?'disabled':''}>${maintenance?'⚒ MAINT.':outOfStock?'SOLD OUT':'🛒 BUY'}</button></div></div></article>`;
+    return `<article class="product reference-product" data-product-url="${escapeHtml(detailUrl)}"><a class="product-image" href="${escapeHtml(detailUrl)}" aria-label="View ${escapeHtml(p.name)} details"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div></a><div class="product-body"><a class="reference-product-title" href="${escapeHtml(detailUrl)}" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</a>${platform}<div class="reference-product-meta">${sold>0?`${sold.toLocaleString()} sold`:'Digital access'}</div><span class="reference-price">${escapeHtml(firstPrice)}</span><div class="reference-card-actions"><a class="button setup-button ${p.download_url?'':'is-unavailable'}" aria-label="${p.download_url?'Open file and setup instructions':'Setup instructions are not configured'}" ${p.download_url?`href="${escapeHtml(p.download_url)}" target="_blank" rel="noopener noreferrer"`:'aria-disabled="true" title="No setup link is configured"'}>${p.download_url?'<svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#download"></use></svg><span>SETUP</span>':'NO SETUP'}</a><button class="button buy-button ${maintenance?'is-maintenance':''}" type="button" aria-label="${maintenance?'Product under maintenance':outOfStock?'Product out of stock':'Buy now'}" data-detail-open="${escapeHtml(p.key)}" ${maintenance||outOfStock?'disabled':''}>${maintenance?'<svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#wrench"></use></svg><span>MAINT.</span>':outOfStock?'SOLD OUT':'<svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#cart"></use></svg><span>BUY</span>'}</button></div></div></article>`;
   }).join('');
 }
 function openProduct(key) {
@@ -191,24 +203,15 @@ async function loadProducts() {
     $('catalogGrid').innerHTML = `<div class="empty">${escapeHtml(e.message)}<br><small>Refresh to try again.</small></div>`;
   }
 }
-function updateAccountDisplay() {
-  if (!account) return;
-  $('authOpen').setAttribute('aria-label', 'Open account');
-  $('navBalance').textContent = money(account.balance_inr || 0, 'INR');
-  $('navBalance').classList.remove('hidden');
-}
 async function syncSession() {
   try {
     const data = await request('/api/store/session');
     if (data.authenticated) {
       account = data.account;
       csrfToken = data.csrf_token || '';
-      updateAccountDisplay();
     } else {
       account = null;
       csrfToken = '';
-      $('authOpen').setAttribute('aria-label', 'Sign in');
-      $('navBalance').classList.add('hidden');
     }
   } catch {
     account = null;
@@ -220,7 +223,6 @@ async function loadWallet() {
   try {
     const data = await request('/api/store/wallet');
     account.balance_inr = Number(data.balance_inr || 0);
-    updateAccountDisplay();
     paymentHistoryCache = data.payment_history || [];
     renderPaymentHistory();
     const entries = data.transactions || [];
@@ -574,21 +576,6 @@ async function pollStatus() {
     $('paymentStatus').textContent = 'Could not check status right now. Try again shortly.';
   }
 }
-async function saveProfile(event) {
-  event.preventDefault();
-  $('profileError').textContent = '';
-  try {
-    const data = await request('/api/store/profile', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ display_name: $('profileDisplayName').value.trim() })
-    });
-    account = { ...account, ...data.account };
-    updateAccountDisplay();
-    toast('Profile updated.');
-  } catch (e) {
-    $('profileError').textContent = e.message;
-  }
-}
 function setCurrency(value) {
   currency = value === 'USD' ? 'USD' : 'INR';
   try { localStorage.setItem('hex_shop_currency', currency); } catch {}
@@ -600,7 +587,6 @@ function setCurrency(value) {
     : 'Wallet balances and all payments settle in INR.';
 }
 
-$('authOpen').addEventListener('click', openAuth);
 $('loginTab').addEventListener('click', () => setAuthMode('login'));
 $('registerTab').addEventListener('click', () => setAuthMode('register'));
 $('authForm').addEventListener('submit', authSubmit);

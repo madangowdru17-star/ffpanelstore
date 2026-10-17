@@ -5,7 +5,9 @@
     root.dataset.theme=value;
     try{localStorage.setItem('hex_shop_theme',value)}catch{}
     document.querySelectorAll('.hx-theme-toggle').forEach(button=>{
-      button.textContent=value==='dark'?'☀ Light':'◐ Theme';
+      const icon=value==='dark'?'sun':'moon';
+      const label=value==='dark'?'Light theme':'Dark theme';
+      button.innerHTML='<svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#'+icon+'"></use></svg><span>'+label+'</span>';
       button.setAttribute('aria-label',value==='dark'?'Switch to light mode':'Switch to dark mode');
     });
   };
@@ -21,14 +23,14 @@
     setTheme(getTheme());
   };
 
-  const navItems=[['/','⌂','Home'],['/add-funds','▰','Add Fund'],['/wallet','▤','Wallet'],['/orders','▣','Orders'],['/keys','♙','My Keys'],['/account','●','Account']];
+  const navItems=[['/','home','Home'],['/add-funds','plus','Add Fund'],['/wallet','wallet','Wallet'],['/orders','receipt','Orders'],['/keys','key','My Keys'],['/account','user','Account']];
   const addBottomNav=()=>{
     const path=location.pathname;
-    if(path.startsWith('/admin')||path==='/login'||path==='/register'||document.querySelector('.hx-bottom-nav'))return;
+    if(path.startsWith('/admin')||document.querySelector('.hx-bottom-nav'))return;
     const nav=document.createElement('nav');nav.className='hx-bottom-nav';nav.setAttribute('aria-label','Main navigation');
     navItems.forEach(([href,icon,label])=>{
       const link=document.createElement('a');link.href=href;
-      link.innerHTML='<span class="hx-nav-icon" aria-hidden="true">'+icon+'</span><span>'+label+'</span>';
+      link.innerHTML='<span class="hx-nav-icon" aria-hidden="true"><svg class="hx-icon"><use href="/assets/icons.svg#'+icon+'"></use></svg></span><span>'+label+'</span>';
       const active=href==='/'?path==='/'||path.startsWith('/product/'):path===href||path.startsWith(href+'/');
       if(active)link.setAttribute('aria-current','page');nav.append(link);
     });
@@ -38,6 +40,7 @@
   const bindMenu=()=>{
     const toggle=document.getElementById('shopMenuToggle'),menu=document.getElementById('shopQuickMenu'),backdrop=document.getElementById('shopMenuBackdrop');
     if(!toggle||!menu||!backdrop)return;
+    if(menu.parentElement!==document.body){document.body.append(backdrop,menu)}
     const signIn=document.getElementById('menuSignIn'),signOut=document.getElementById('menuSignOut');
     const close=()=>{menu.classList.add('hidden');backdrop.classList.add('hidden');menu.setAttribute('aria-hidden','true');backdrop.setAttribute('aria-hidden','true');toggle.setAttribute('aria-expanded','false');toggle.classList.remove('is-open');document.body.classList.remove('menu-open')};
     const open=async()=>{

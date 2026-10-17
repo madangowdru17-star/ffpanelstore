@@ -1,26 +1,28 @@
 # TODO — Website re-audit and repairs
 
-## Completed in source and local tests
+## Current UI-only pass (active request)
 
-- [x] Audited the existing repository, page routes, major storefront/account/admin/payment flows, deployment files, and supplied screenshots before changing the site. The existing project already has more than 20 public assets/pages; no files were added just to increase the count.
-- [x] Kept the PHP front controller, existing folders, green/ivory design concept, catalog and three-line menu. Removed the redundant homepage profile/wallet/history panel; the account control goes to the existing account page/sign-in flow.
-- [x] Kept mobile navigation reachable, added Wallet to the shared bottom navigation, and adjusted the responsive six-destination layout. Preserved product records, API fields/contracts, images, prices, durations and filters while removing the visible Root/Non-root/iOS badges/specification chips from cards/details.
-- [x] Corrected login/register internal next-path validation and its malformed-regex warnings.
-- [x] Added method-scoped idempotency keys to homepage, product-detail and Add Funds requests. Replays return the same order only for the same account/method/product/duration/amount; mismatches are rejected. UPI provider requests create an `initiating` local intent first and ambiguous provider outcomes fail closed rather than asking the customer to pay again.
-- [x] Tightened payment settlement to accept only exact documented positive status strings and check the received amount before wallet credit or product fulfillment.
-- [x] Made GET payment-status routes read-only and added explicit CSRF-protected POST verification routes. Product-checkout verification is available in checkout, Orders and account views. Pending UPI wallet top-ups can be reopened and verified from Add Funds, Wallet and account payment history.
-- [x] Prevented the same crypto transaction ID from being claimed in wallet and product-proof flows. Crypto proof stays private to the authenticated admin; only confirmed admin approval credits a wallet or begins product fulfillment.
-- [x] Moved new administrator sessions from browser localStorage bearer tokens to HttpOnly same-origin cookies with CSRF checks on mutations, and added a server-side logout route. Existing legacy admin token headers are accepted for compatibility but are not issued by the updated UI.
-- [x] Added `/readyz` for database readiness while keeping `/healthz` free from schema setup/seeding. Railway startup now fails clearly when production omits an absolute writable `DATABASE_PATH` for persistent storage.
-- [x] Removed valid-looking administrator credentials from `.env.example`; admin bootstrap refuses placeholder/default-like credentials and short passwords.
-- [x] PHP syntax lint passed on all 29 files; all standalone JavaScript and the PHP-rendered product checkout script parsed; shell syntax and `git diff --check` passed.
-- [x] Disposable-SQLite HTTP tests passed for health/readiness, customer page routes, homepage menu/profile removal, payment replay/method binding, order status GET/POST, customer CSRF, global TXID uniqueness, cookie-based admin login/CSRF/logout, admin rejection, and fail-closed behavior without live UPI credentials. Tests used synthetic users/sessions and made no real provider or supplier calls.
+- [ ] Inspect every customer-facing page/shell, navigation state, tab row, payment option, form, and relevant stylesheet/script before editing. Use the supplied account screenshot to trace the top-control overlap and cross-page tab differences.
+- [ ] Keep the existing project structure, green/ivory concept, products, APIs, pages and working behaviors. Limit this pass to presentation/markup/icon assets. Do not add a duplicate account/profile area or change payment logic, product data, routes, request payloads, status handling or QR configuration.
+- [ ] Remove the redundant top profile icon/control from the shared header while keeping the existing hamburger menu and existing bottom Account destination. Align and space the remaining controls consistently on all pages.
+- [ ] Make shared navigation/tab presentation consistent between home and every customer page; fix horizontal overflow, clipping, overlap, spacing and active states at mobile and desktop breakpoints without breaking the account dashboard’s in-place tabs.
+- [ ] Replace emoji/Unicode glyphs used as UI icons with consistent inline SVG/HTML icons. Keep accessible labels and visible text for navigation and payment actions.
+- [ ] Add the actual logo artwork requested for ALL, NON-ROOT (Android), ROOT (Kitsune Mask) and IOS (Apple) category/filter indicators, with textual labels and accessible descriptions. Keep existing filters and product data intact.
+- [ ] Add locally stored first-party Google Pay, Binance Pay and USDt/Tether logo assets to the relevant existing UPI/Binance/USDT payment-method choices; do not imply a new provider/API integration or change the payment flow.
+- [ ] Re-test all page shells and tab states at mobile widths, including account, wallet, Add Funds, orders, keys, login/register and admin layouts; verify keyboard focus/accessible names and that the rendered logos load locally.
+- [ ] Commit and push only the approved UI/assets/docs changes to the selected repository after checks pass.
 
-## Must be completed in Railway/provider configuration before claiming live production verification
+## Previous source-level fixes already present
 
-- [ ] Rotate any `ADMIN_PASSWORD`, `ADMIN_WEB_KEY`, FamGateway, reseller, and Google OAuth secrets ever committed in public Git history. Replace them only through protected hosting/provider configuration; do not reuse old values. This source update does not rewrite public history or change hosted secrets.
-- [ ] Confirm Railway sets `DATABASE_PATH` to an absolute writable mounted persistent volume and uses a single migration/writer deployment path.
-- [ ] Confirm the uploaded Binance Pay and USDT/BEP20 QR destinations, receiving accounts, supported chain and payment instructions before collecting real transfers.
-- [ ] A provider callback/webhook was **not** fabricated. No authenticated provider callback contract/signature or endpoint was present in the repository. Live reconciliation currently uses explicit customer status-verification requests against the existing provider integration. Add a webhook only after obtaining the provider's exact signing and retry specification.
-- [ ] Live provider credentials, successful payment, provider amount/status payload, OAuth callback and supplier fulfillment remain untested. Verify each against Railway/provider logs after deployment; do not use production customers or real charges for local regression testing.
-- [ ] The public Railway homepage and `/healthz`, `/login`, `/` returned HTTP 429 `railway-hikari` edge challenges during this task; visual/live production behavior could not be confirmed while that edge check blocks access.
+- [x] Existing front controller, folders and green/ivory concept kept; duplicate homepage profile/wallet/history panel removed and homepage account control routed to existing account/sign-in flow.
+- [x] Wallet remains accessible in shared mobile navigation; six-destination bottom nav layout added. Existing catalog, prices, images, durations and filters preserved; prior visible Root/Non-root/iOS chips were removed from product cards/details and will now be restored only as requested image-backed category badges in this UI-only pass.
+- [x] Login/register internal next-path validation corrected.
+- [x] Method-scoped idempotency, exact-positive-status settlement, read-only status GETs, explicit CSRF-protected POST verification, global crypto TXID uniqueness, and authenticated admin proof handling implemented in prior source pass.
+- [x] New admin sessions use HttpOnly same-origin cookies with CSRF checks; Railway `/readyz` and persistent DB startup checks added; public example admin defaults removed.
+- [x] Previous local PHP/JS/shell syntax checks, `git diff --check`, and disposable SQLite HTTP regressions passed. The current UI-only work will rerun focused checks on changed pages/styles/assets.
+
+## Live-production prerequisites (not safely verifiable in this source-only UI pass)
+
+- [ ] Rotate any administrator, payment, reseller and Google OAuth secrets historically committed in public Git history, using protected hosting/provider configuration.
+- [ ] Confirm Railway persistent volume, payment QR destinations/receiving accounts and the exact payment provider webhook/signature contract. No unsupported callback is to be fabricated.
+- [ ] Live provider credentials, callback/OAuth success, actual payments, supplier fulfillment and Railway browser rendering remain untested. The public Railway routes returned a 429 `railway-hikari` challenge during the earlier audit.

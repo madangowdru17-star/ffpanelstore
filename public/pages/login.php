@@ -24,12 +24,12 @@ $googleMessage = $messages[(string) ($_GET['google'] ?? '')] ?? '';
   <h1>Sign in</h1>
   <p class="hx-muted">Access your wallet, orders and delivered keys.</p>
   <?php if ($googleMessage !== ''): ?><div class="hx-alert" role="status"><?= htmlspecialchars($googleMessage, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
-  <a class="hx-button hx-google" href="<?= htmlspecialchars($googleUrl, ENT_QUOTES, 'UTF-8') ?>"><span aria-hidden="true">G</span> Continue with Google</a>
+  <a class="hx-button hx-google" href="<?= htmlspecialchars($googleUrl, ENT_QUOTES, 'UTF-8') ?>">Continue with Google</a>
   <div class="hx-divider"><span>or use email</span></div>
   <form id="loginForm" class="hx-form" novalidate>
     <label for="loginEmail">Email<input id="loginEmail" type="email" name="email" autocomplete="email" required maxlength="254"></label>
     <label for="loginPassword">Password<input id="loginPassword" type="password" name="password" autocomplete="current-password" required maxlength="256"></label>
-    <button class="hx-button" type="submit"><span class="login-button-icon" aria-hidden="true">↪</span> Sign in</button>
+    <button class="hx-button" type="submit"><svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#arrow-right"></use></svg> Sign in</button>
     <div class="hx-alert" id="authStatus" role="alert" aria-live="polite"></div>
   </form>
   <p class="hx-muted">New here? <a href="<?= htmlspecialchars($registerUrl, ENT_QUOTES, 'UTF-8') ?>">Create an account</a></p>

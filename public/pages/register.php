@@ -11,13 +11,13 @@ require __DIR__.'/_head.php';
 <section class="hx-panel hx-auth-panel hx-login-panel">
   <p class="hx-eyebrow">CREATE YOUR ACCOUNT</p><h1>Join HEX CHEATS SHOP</h1>
   <p class="hx-muted">Keep your wallet, payment history, orders and delivered keys together.</p>
-  <a class="hx-button hx-google" href="<?=htmlspecialchars($googleUrl,ENT_QUOTES,'UTF-8')?>"><span aria-hidden="true">G</span> Continue with Google</a>
+  <a class="hx-button hx-google" href="<?=htmlspecialchars($googleUrl,ENT_QUOTES,'UTF-8')?>">Continue with Google</a>
   <div class="hx-divider"><span>or use email</span></div>
   <form id="registerForm" class="hx-form" novalidate>
     <label for="registerName">Display name<input id="registerName" type="text" name="display_name" autocomplete="name" maxlength="100"></label>
     <label for="registerEmail">Email<input id="registerEmail" type="email" name="email" autocomplete="email" required maxlength="254"></label>
     <label for="registerPassword">Password<input id="registerPassword" type="password" name="password" autocomplete="new-password" minlength="10" maxlength="256" required><small>Use at least 10 characters.</small></label>
-    <button class="hx-button" type="submit"><span aria-hidden="true">✦</span> Create account</button>
+    <button class="hx-button" type="submit"><svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#user"></use></svg> Create account</button>
     <div class="hx-alert" id="authStatus" role="alert" aria-live="polite"></div>
   </form>
   <p class="hx-muted">Already registered? <a href="<?=htmlspecialchars($loginUrl,ENT_QUOTES,'UTF-8')?>">Sign in</a></p>

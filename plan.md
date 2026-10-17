@@ -23,12 +23,12 @@ Continue only in the existing `madangowdru17-star/ffpanelstore` repository. Keep
 - **Color philosophy:** leaf green signals the shop/actions and availability; ivory surfaces improve readability; ink/navy dark mode reduces glare; one shared green accent persists in both themes.
 - **Layout paradigm:** compact fixed pill header and bottom navigation frame a content-first page; hero carousel precedes the filter row; catalog uses three columns on mobile, with tighter card imagery and spacing on extra-narrow screens.
 - **Signature elements:** glassy green header capsules; compact product cards with image, clear price, file/setup and buy states; floating bottom navigation with active indicator.
-- **Interaction philosophy:** touch-sized buttons, persistent four filters (`All`, `Non-root`, `Root`, `iOS`), immediate price/status feedback, a single account drawer with accessible in-place tabs, explicit amount/network details, and no modal-only destination for profile/history pages.
+- **Interaction philosophy:** touch-sized buttons, persistent four filters (`All`, `Non-root`, `Root`, `iOS`) with image marks and accessible text, immediate price/status feedback, one existing hamburger navigation, a single account area with accessible in-place tabs, explicit amount/network details, and no modal-only destination for profile/history pages.
 - **Animation:** subtle state transitions, smooth account/payment-tab changes and carousel fade/slide only; honor reduced-motion preferences.
 - **Typography:** system UI for dependable mobile rendering; heavier condensed-feeling product headings and tabular/monospaced transaction/key values.
 - **Brand essence:** digital access products for mobile gamers, with clear pricing and account-based fulfillment; practical, confident, approachable.
 - **Brand voice:** concise, direct, helpful. Example: “Choose your access type.” / “Your key appears in My Key after delivery.”
-- **Wordmark & logo:** retain the current HX mark and shop wordmark in a compact pill; no unrelated service/logo assets are introduced.
+- **Wordmark & logo:** retain the current HX mark and shop wordmark in a compact pill; use first-party Android/Apple/Kitsune category artwork and Google Pay/Binance/Tether payment marks only where those options already exist. Keep brand assets local and preserve their credits.
 - **Signature brand color:** leaf green, adapted from the screenshot; light and dark themes share the same accent.
 
 ## Authentication and payments
@@ -38,3 +38,7 @@ Google Sign-In must use the supplied OAuth client ID through environment configu
 ## Current repair scope
 
 Retain the current project structure and green/ivory shop design. Fix verified route, form and navigation defects rather than replatforming or adding files for count. In the payment flow, persist and bind payment intents before external provider side effects, require exact safe payment-status values and amount checks, prevent transaction-ID reuse across manual proof flows, and keep delivery/credit behind successful verification or admin approval. Preserve existing FamGateway/reseller payload contracts unless the provider's published contract confirms a safe additive change. Do not fabricate an unsupported callback signature or provider endpoint: retain CSRF-protected status verification until the provider contract is available. Production-only behavior remains conditional on the actual Railway environment, persistent volume, domain/proxy settings and provider credentials.
+
+## Current UI-only scope
+
+Keep this pass limited to visual presentation and local brand-icon assets. Audit the header, mobile shell, filters, tabs, account/wallet/orders/keys/Add Funds/product/auth/admin page layouts and shared CSS before implementation. Remove the redundant top profile icon but retain the hamburger menu and bottom Account destination. Correct cross-page active states, spacing and overflow; use inline SVG for functional UI icons. Show Android/Kitsune/Apple images with accessible text for the existing category filters, and show Google Pay/Binance/Tether marks next to existing payment choices. Do not change APIs, endpoint calls, payment status or provider behavior, QR content, products, catalog values, database or routes. Re-test every affected shell and route at mobile/desktop widths. This pass follows the user’s latest explicit UI-only restriction and supersedes earlier product-badge-removal wording for category/filter artwork only.

@@ -1,7 +1,17 @@
 <?php
-declare(strict_types=1);
-$pageTitle = (string) ($pageTitle ?? 'HEX CHEATS SHOP');
-$activePage = (string) ($activePage ?? '');
+ declare(strict_types=1);
+ $pageTitle = (string) ($pageTitle ?? 'HEX CHEATS SHOP');
+ $activePage = (string) ($activePage ?? '');
 ?>
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#16834c"><title><?= htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8') ?></title></head><body>
-<div class="wrap hx-page-wrap"><header class="top reference-header"><a class="home-icon-btn" href="/" aria-label="Home">⌂</a><a class="brand" href="/" aria-label="HEX CHEATS SHOP home"><span class="site-name-stylish">HEX CHEATS SHOP</span></a><nav class="nav" aria-label="Shop navigation"><a class="navlink" href="/#catalog">Products</a><a class="navlink" href="/wallet">Wallet</a><a class="navlink" href="/orders">Orders</a><label class="page-currency" aria-label="Display currency"><select data-page-currency><option value="INR">🇮🇳 INR</option><option value="USD">🇺🇸 USD</option></select></label><a class="navbtn" href="/account" aria-label="Account">●</a><button class="menu-trigger" type="button" id="shopMenuToggle" aria-expanded="false" aria-controls="shopQuickMenu" aria-label="Open shop navigation">☰</button></nav><div class="shop-menu-backdrop hidden" id="shopMenuBackdrop" aria-hidden="true"></div><aside class="shop-quick-menu hidden" id="shopQuickMenu" aria-label="Account menu" aria-hidden="true"><div class="shop-menu-header"><button type="button" class="shop-menu-close" data-menu-close aria-label="Close account menu">×</button><span class="shop-menu-avatar" aria-hidden="true">●</span><div class="shop-menu-identity"><strong id="menuProfileName">Your shop account</strong><span id="menuProfileEmail">Sign in to see your account</span></div></div><nav class="shop-menu-links" aria-label="Account pages"><a href="/account"><span aria-hidden="true">●</span> My account</a><a href="/orders"><span aria-hidden="true">▣</span> My orders</a><a href="/keys"><span aria-hidden="true">⌑</span> My keys</a><a href="/add-funds"><span aria-hidden="true">＋</span> Add funds</a><a href="/wallet"><span aria-hidden="true">▤</span> Wallet &amp; payment history</a></nav><div class="shop-menu-actions"><a class="shop-menu-signin" id="menuSignIn" href="/login">Sign in</a><button type="button" class="shop-menu-signout hidden" id="menuSignOut">Sign out</button></div></aside></header><main class="hx-page-main">
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#16834c">
+  <title><?= htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8') ?></title>
+</head>
+<body>
+<div class="wrap hx-page-wrap">
+  <?php require __DIR__ . '/_nav.php'; ?>
+  <main class="hx-page-main">
