@@ -4,6 +4,8 @@ declare(strict_types=1);
 final class Auth
 {
     private const SESSION_COOKIE = 'hex_shop_session';
+    private const ADMIN_SESSION_COOKIE = 'hex_admin_session';
+    private const ADMIN_CSRF_COOKIE = 'hex_admin_csrf';
     private const SESSION_TTL = 2592000;
 
     public static function current(): ?array
@@ -176,7 +178,10 @@ final class Auth
         }
         $email = strtolower(trim((string) (getenv('ADMIN_EMAIL') ?: '')));
         $password = (string) (getenv('ADMIN_PASSWORD') ?: '');
-        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($password) < 10 || strlen($password) > 256) {
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)
+            || preg_match('/@(?:example\.(?:com|net|org)|invalid)$/i', $email)
+            || strlen($password) < 12 || strlen($password) > 256
+            || str_starts_with(strtolower($password), 'replace-with-')) {
             return;
         }
         Database::pdo()->prepare('INSERT OR IGNORE INTO store_admin_users(email,password_hash,created_at) VALUES(?,?,?)')
@@ -214,11 +219,18 @@ final class Auth
     private static function createAdminSession(): array
     {
         $token = bin2hex(random_bytes(32));
+        $csrf = bin2hex(random_bytes(32));
         $now = time();
-        $statement = Database::pdo()->prepare('INSERT INTO admin_sessions(token_hash,expires_at,created_at) VALUES(?,?,?)');
-        $statement->execute([hash('sha256', $token), $now + 43200, $now]);
+        $statement = Database::pdo()->prepare('INSERT INTO admin_sessions(token_hash,csrf_token,expires_at,created_at) VALUES(?,?,?,?)');
+        $statement->execute([hash('sha256', $token), $csrf, $now + 43200, $now]);
         Database::pdo()->prepare('DELETE FROM admin_sessions WHERE expires_at < ?')->execute([$now]);
-        return ['token' => $token, 'expires_in' => 43200];
+        $secure = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+            || strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https'
+            || getenv('RAILWAY_PUBLIC_DOMAIN');
+        $options = ['expires' => $now + 43200, 'path' => '/admin', 'secure' => (bool) $secure, 'samesite' => 'Strict'];
+        setcookie(self::ADMIN_SESSION_COOKIE, $token, $options + ['httponly' => true]);
+        setcookie(self::ADMIN_CSRF_COOKIE, $csrf, $options + ['httponly' => false]);
+        return ['ok' => true, 'expires_in' => 43200];
     }
 
     public static function changeAdminPassword(array $body): array
@@ -241,17 +253,46 @@ final class Auth
 
     public static function requireAdmin(): void
     {
-        $token = (string) ($_SERVER['HTTP_X_ADMIN_TOKEN'] ?? '');
+        $cookieToken = (string) ($_COOKIE[self::ADMIN_SESSION_COOKIE] ?? '');
+        $legacyToken = (string) ($_SERVER['HTTP_X_ADMIN_TOKEN'] ?? '');
+        $token = $cookieToken !== '' ? $cookieToken : $legacyToken;
         if ($token === '' || strlen($token) > 256) {
             throw new HttpError('Admin sign-in required.', 401);
         }
-        $row = Database::row('SELECT expires_at FROM admin_sessions WHERE token_hash = ?', [hash('sha256', $token)]);
+        $row = Database::row('SELECT expires_at,csrf_token FROM admin_sessions WHERE token_hash = ?', [hash('sha256', $token)]);
         if (!$row || (int) $row['expires_at'] < time()) {
             if ($row) {
                 Database::pdo()->prepare('DELETE FROM admin_sessions WHERE token_hash = ?')->execute([hash('sha256', $token)]);
             }
             throw new HttpError('Admin sign-in required.', 401);
         }
+        if ($cookieToken !== '') {
+            $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+            if (!in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) {
+                $supplied = (string) ($_SERVER['HTTP_X_ADMIN_CSRF'] ?? '');
+                $cookie = (string) ($_COOKIE[self::ADMIN_CSRF_COOKIE] ?? '');
+                $expected = (string) $row['csrf_token'];
+                if ($expected === '' || $supplied === '' || $cookie === ''
+                    || !hash_equals($expected, $supplied) || !hash_equals($expected, $cookie)) {
+                    throw new HttpError('Admin session check failed. Refresh and try again.', 403);
+                }
+            }
+        }
+    }
+
+    public static function adminLogout(): array
+    {
+        $token = (string) ($_COOKIE[self::ADMIN_SESSION_COOKIE] ?? $_SERVER['HTTP_X_ADMIN_TOKEN'] ?? '');
+        if ($token !== '') {
+            Database::pdo()->prepare('DELETE FROM admin_sessions WHERE token_hash=?')->execute([hash('sha256', $token)]);
+        }
+        $secure = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+            || strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https'
+            || getenv('RAILWAY_PUBLIC_DOMAIN');
+        $options = ['expires' => time() - 3600, 'path' => '/admin', 'secure' => (bool) $secure, 'samesite' => 'Strict'];
+        setcookie(self::ADMIN_SESSION_COOKIE, '', $options + ['httponly' => true]);
+        setcookie(self::ADMIN_CSRF_COOKIE, '', $options + ['httponly' => false]);
+        return ['ok' => true];
     }
 
     private static function createSession(int $accountId): string

@@ -1,6 +1,29 @@
 'use strict';
 
 const $ = id => document.getElementById(id);
+const idemMemory = new Map();
+function requestIdempotency(scope, fingerprint) {
+  const storageKey = `hex_payment_${scope}`;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
+    if (saved?.fingerprint === fingerprint && /^[A-Za-z0-9_-]{16,64}$/.test(saved.key || '')) return saved.key;
+  } catch {
+    const saved = idemMemory.get(storageKey);
+    if (saved?.fingerprint === fingerprint) return saved.key;
+  }
+  const cryptoApi = globalThis.crypto;
+  const key = cryptoApi?.randomUUID ? cryptoApi.randomUUID().replace(/-/g, '')
+    : cryptoApi?.getRandomValues ? Array.from(cryptoApi.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('')
+    : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
+  const value = { fingerprint, key };
+  idemMemory.set(storageKey, value);
+  try { sessionStorage.setItem(storageKey, JSON.stringify(value)); } catch {}
+  return key;
+}
+function clearRequestIdempotency(scope) {
+  idemMemory.delete(`hex_payment_${scope}`);
+  try { sessionStorage.removeItem(`hex_payment_${scope}`); } catch {}
+}
 const storedCurrency = () => {
   try { return localStorage.getItem('hex_shop_currency') === 'USD' ? 'USD' : 'INR'; }
   catch { return 'INR'; }
@@ -58,15 +81,8 @@ function toast(message, error = false) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => node.classList.add('hidden'), 3800);
 }
-function showAccount() {
-  setProfileTab('profile');
-  $('accountPanel').classList.add('show');
-  $('accountPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  loadWallet();
-  loadOrders();
-}
 function openAuth() {
-  if (account) return showAccount();
+  if (account) { location.assign('/account'); return; }
   const googleLink = $('googleAuthLink');
   if (googleLink) {
     const next = pendingProduct ? `/product/${encodeURIComponent(pendingProduct.key)}` : '/account';
@@ -177,11 +193,7 @@ async function loadProducts() {
 }
 function updateAccountDisplay() {
   if (!account) return;
-  $('authOpen').textContent = 'Profile';
-  $('accountName').textContent = account.display_name || account.email || 'Shop customer';
-  $('accountMeta').textContent = account.email || 'Shop account';
-  $('profileDisplayName').value = account.display_name || '';
-  $('walletBalance').textContent = money(account.balance_inr || 0, 'INR');
+  $('authOpen').setAttribute('aria-label', 'Open account');
   $('navBalance').textContent = money(account.balance_inr || 0, 'INR');
   $('navBalance').classList.remove('hidden');
 }
@@ -192,14 +204,11 @@ async function syncSession() {
       account = data.account;
       csrfToken = data.csrf_token || '';
       updateAccountDisplay();
-      $('accountPanel').classList.add('show');
-      await Promise.all([loadWallet(), loadOrders()]);
     } else {
       account = null;
       csrfToken = '';
-      $('authOpen').textContent = 'Sign in';
+      $('authOpen').setAttribute('aria-label', 'Sign in');
       $('navBalance').classList.add('hidden');
-      $('accountPanel').classList.remove('show');
     }
   } catch {
     account = null;
@@ -215,7 +224,9 @@ async function loadWallet() {
     paymentHistoryCache = data.payment_history || [];
     renderPaymentHistory();
     const entries = data.transactions || [];
-    $('walletTransactions').innerHTML = entries.length ? entries.map(t => {
+    const transactionList = $('walletTransactions');
+    if (!transactionList) return;
+    transactionList.innerHTML = entries.length ? entries.map(t => {
       const positive = Number(t.amount_inr) >= 0;
       return `<div class="wallet-txn"><div><strong>${escapeHtml(t.description || t.kind)}</strong><small>${escapeHtml(new Date(Number(t.created_at) * 1000).toLocaleString())}</small></div><b class="${positive ? 'credit' : 'debit'}">${positive ? '+' : '−'}${escapeHtml(money(Math.abs(Number(t.amount_inr)), 'INR'))}</b></div>`;
     }).join('') : '<div class="hint">Wallet activity will appear here.</div>';
@@ -297,13 +308,7 @@ function buyProduct(key, selectId) {
 function choosePurchase(key, duration) {
   const product = products.find(item => item.key === key);
   if (!product) return;
-  const oldKey = pendingProduct && pendingProduct.key === key && pendingProduct.duration === duration
-    ? pendingProduct.idempotencyKey : '';
-  const cryptoApi = globalThis.crypto;
-  const generatedKey = cryptoApi && cryptoApi.randomUUID ? cryptoApi.randomUUID().replace(/-/g, '')
-    : cryptoApi && cryptoApi.getRandomValues ? Array.from(cryptoApi.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2, '0')).join('')
-    : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
-  const idempotencyKey = oldKey || generatedKey;
+  const idempotencyKey = requestIdempotency('product-checkout', `${key}|${duration}`);
   pendingProduct = { key, duration, idempotencyKey };
   const display = displayPrice(product, duration);
   const inr = product.prices && product.prices[duration];
@@ -326,10 +331,11 @@ async function payWithWallet() {
   try {
     const data = await request('/api/store/checkout/wallet', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ product_key: selected.key, duration: selected.duration, idempotency_key: selected.idempotencyKey })
+      body: JSON.stringify({ product_key: selected.key, duration: selected.duration, idempotency_key: `${selected.idempotencyKey}_wallet` })
     });
     $('purchaseChoiceModal').classList.add('hidden');
     pendingProduct = null;
+    clearRequestIdempotency('product-checkout');
     await Promise.all([syncSession(), loadOrders()]);
     if (data.status === 'complete') toast(`Order delivered: ${data.delivery_key || data.order_id}`);
     else toast(`Wallet payment accepted. Delivery status: ${data.status}`, data.status === 'paid_delivery_failed');
@@ -353,6 +359,7 @@ async function startCryptoProductCheckout(method) {
     });
     $('purchaseChoiceModal').classList.add('hidden');
     pendingProduct = null;
+    clearRequestIdempotency('product-checkout');
     activePaymentType = 'crypto_checkout';
     activeOrder = data.order_id;
     const label = method === 'usdt_bep20' ? 'USDT · BNB Smart Chain (BEP20)' : 'Binance Pay · USD';
@@ -381,12 +388,14 @@ async function startCryptoProductCheckout(method) {
   } finally { button.disabled = false; }
 }
 
-async function startCheckout(key, duration) {
+async function startCheckout(key, duration, idempotencyKey) {
   try {
     const data = await request('/api/store/checkout', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ product_key: key, duration })
+      body: JSON.stringify({ product_key: key, duration, idempotency_key: `${idempotencyKey}_upi` })
     });
+    clearRequestIdempotency('product-checkout');
+    pendingProduct = null;
     activePaymentType = 'checkout';
     activeOrder = data.order_id;
     $('paymentSubtitle').textContent = 'Complete the UPI checkout. Your order will be fulfilled after payment is verified.';
@@ -417,8 +426,9 @@ async function startTopup(event) {
   try {
     const data = await request('/api/store/wallet/topups', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount_inr: amount })
+      body: JSON.stringify({ amount_inr: amount, idempotency_key: requestIdempotency('wallet-upi-topup', String(amount)) })
     });
+    clearRequestIdempotency('wallet-upi-topup');
     activePaymentType = 'wallet';
     activeOrder = data.order_id;
     $('paymentSubtitle').textContent = 'Complete the UPI checkout. Your wallet is credited after payment is verified.';
@@ -452,8 +462,9 @@ async function startBinanceTopup(event) {
   try {
     const data = await request('/api/store/wallet/binance', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount_usd: amount })
+      body: JSON.stringify({ amount_usd: amount, idempotency_key: requestIdempotency('wallet-binance-topup', String(amount)) })
     });
+    clearRequestIdempotency('wallet-binance-topup');
     activePaymentType = 'binance';
     activeOrder = data.order_id;
     $('paymentSubtitle').textContent = 'Pay the exact USD amount, then submit the transaction ID and screenshot for manual verification.';
@@ -506,9 +517,9 @@ async function pollStatus() {
   if (!activeOrder) return;
   try {
     const path = ['wallet','binance'].includes(activePaymentType)
-      ? `/api/store/wallet/topups/${encodeURIComponent(activeOrder)}`
-      : `/api/store/checkouts/${encodeURIComponent(activeOrder)}`;
-    const data = await request(path);
+      ? `/api/store/wallet/topups/${encodeURIComponent(activeOrder)}/verify`
+      : `/api/store/checkouts/${encodeURIComponent(activeOrder)}/verify`;
+    const data = await request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const status = data.status;
     if (activePaymentType === 'binance') {
       $('paymentStatus').textContent = status === 'manual_pending' ? 'Payment request created. Pay the exact USD amount and submit your screenshot and transaction ID.'
@@ -600,37 +611,22 @@ $('heroNext').addEventListener('click',()=>{clearInterval(carouselTimer);goSlide
 document.addEventListener('click',event=>{
   const filter=event.target.closest('[data-store-filter]');
   if(filter){selectedStoreFilter=filter.dataset.storeFilter;filter.classList.remove('tab-tap');void filter.offsetWidth;filter.classList.add('tab-tap');$('catalogGrid').classList.add('is-switching');renderFilterGroups();renderProducts();setTimeout(()=>$('catalogGrid')?.classList.remove('is-switching'),420);return}
-  const profileTab=event.target.closest('[data-profile-tab]');
-  if(profileTab){setProfileTab(profileTab.dataset.profileTab);return}
   const dot=event.target.closest('[data-slide]');if(dot){clearInterval(carouselTimer);goSlide(Number(dot.dataset.slide));carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500);return}
   const card=event.target.closest('[data-open-product]');if(card)openProduct(card.dataset.openProduct);
   const direct=event.target.closest('[data-detail-open]');if(direct){event.preventDefault();openProduct(direct.dataset.detailOpen);return}
   const cardSurface=event.target.closest('[data-product-url]');if(cardSurface&&!event.target.closest('a,button'))location.href=cardSurface.dataset.productUrl;
 });
 $('checkPayment').addEventListener('click', pollStatus);
-$('profileForm').addEventListener('submit', saveProfile);
-$('topupForm').addEventListener('submit', startTopup);
-$('binanceTopupForm').addEventListener('submit', startBinanceTopup);
 $('binanceProofForm').addEventListener('submit', submitBinanceProof);
 $('payWalletButton').addEventListener('click', payWithWallet);
 $('payOnlineButton').addEventListener('click', () => {
   if (!pendingProduct) return;
   const selected = pendingProduct;
   $('purchaseChoiceModal').classList.add('hidden');
-  pendingProduct = null;
-  startCheckout(selected.key, selected.duration);
+  startCheckout(selected.key, selected.duration, selected.idempotencyKey);
 });
 $('payBinanceCheckoutButton').addEventListener('click', () => startCryptoProductCheckout('binance'));
 $('payUsdtCheckoutButton').addEventListener('click', () => startCryptoProductCheckout('usdt_bep20'));
-$('logoutButton').addEventListener('click', async () => {
-  try { await request('/api/store/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch {}
-  account = null;
-  csrfToken = '';
-  $('accountPanel').classList.remove('show');
-  $('navBalance').classList.add('hidden');
-  $('authOpen').textContent = 'Sign in';
-  toast('Signed out.');
-});
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).classList.add('hidden')));
 document.querySelectorAll('.modal').forEach(modal => modal.addEventListener('click', event => {
   if (event.target === modal) modal.classList.add('hidden');

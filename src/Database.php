@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS store_google_oauth_states (
 );
 CREATE TABLE IF NOT EXISTS admin_sessions (
     token_hash TEXT PRIMARY KEY,
+    csrf_token TEXT NOT NULL DEFAULT '',
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
@@ -252,6 +253,10 @@ SQL);
         }
         self::pdo()->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_store_accounts_google_sub ON store_accounts(google_sub) WHERE google_sub != ''");
         self::pdo()->exec('DELETE FROM store_google_oauth_states WHERE expires_at < ' . time());
+        $adminSessionColumns = array_fill_keys(array_map(static fn(array $column): string => (string) $column['name'], self::rows('PRAGMA table_info(admin_sessions)')), true);
+        if (!isset($adminSessionColumns['csrf_token'])) {
+            self::pdo()->exec("ALTER TABLE admin_sessions ADD COLUMN csrf_token TEXT NOT NULL DEFAULT ''");
+        }
         $checkoutColumns = self::rows('PRAGMA table_info(store_checkouts)');
         $hasIdempotencyKey = false;
         foreach ($checkoutColumns as $column) {
@@ -267,6 +272,7 @@ SQL);
         $topupColumns = self::rows('PRAGMA table_info(store_wallet_topups)');
         $existingTopupColumns = array_fill_keys(array_map(static fn(array $column): string => (string) $column['name'], $topupColumns), true);
         $topupMigrations = [
+            'idempotency_key' => "TEXT NOT NULL DEFAULT ''",
             'payment_method' => "TEXT NOT NULL DEFAULT 'upi'",
             'amount_usd' => 'REAL NOT NULL DEFAULT 0',
             'exchange_rate_inr' => 'REAL NOT NULL DEFAULT 0',
@@ -282,7 +288,41 @@ SQL);
                 self::pdo()->exec('ALTER TABLE store_wallet_topups ADD COLUMN ' . $column . ' ' . $definition);
             }
         }
+        self::pdo()->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_store_wallet_topup_idempotency ON store_wallet_topups(account_id,idempotency_key) WHERE idempotency_key != ''");
         self::pdo()->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_store_wallet_topups_proof_txid ON store_wallet_topups(proof_txid) WHERE proof_txid != ''");
+        self::pdo()->exec(<<<'SQL'
+CREATE TABLE IF NOT EXISTS store_payment_txid_claims (
+    txid_hash TEXT PRIMARY KEY,
+    owner_type TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+SQL);
+        $claim = self::pdo()->prepare('INSERT OR IGNORE INTO store_payment_txid_claims(txid_hash,owner_type,order_id,created_at) VALUES(?,?,?,?)');
+        foreach (self::rows("SELECT proof_txid,order_id,created_at FROM store_checkout_crypto_proofs WHERE trim(proof_txid) != ''") as $proof) {
+            $claim->execute([hash('sha256', strtolower(trim((string) $proof['proof_txid']))), 'checkout', (string) $proof['order_id'], (int) $proof['created_at']]);
+        }
+        foreach (self::rows("SELECT proof_txid,order_id,created_at FROM store_wallet_topups WHERE trim(proof_txid) != ''") as $proof) {
+            $claim->execute([hash('sha256', strtolower(trim((string) $proof['proof_txid']))), 'wallet', (string) $proof['order_id'], (int) $proof['created_at']]);
+        }
+    }
+
+    public static function reservePaymentTxid(string $txid, string $ownerType, string $orderId): void
+    {
+        $normalized = strtolower(trim($txid));
+        if ($normalized === '' || !in_array($ownerType, ['wallet', 'checkout'], true)) {
+            throw new HttpError('Invalid payment transaction reference.', 400);
+        }
+        try {
+            self::pdo()->prepare(
+                'INSERT INTO store_payment_txid_claims(txid_hash,owner_type,order_id,created_at) VALUES(?,?,?,?)'
+            )->execute([hash('sha256', $normalized), $ownerType, $orderId, time()]);
+        } catch (PDOException $e) {
+            if ((int) ($e->errorInfo[1] ?? 0) === 19) {
+                throw new HttpError('That crypto transaction ID has already been submitted.', 409);
+            }
+            throw $e;
+        }
     }
 
     public static function rows(string $sql, array $params = []): array

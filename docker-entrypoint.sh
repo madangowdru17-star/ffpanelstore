@@ -31,16 +31,33 @@ if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then
 fi
 sed -ri "s/^Listen [0-9]+$/Listen ${port}/" /etc/apache2/ports.conf
 sed -ri "s/<VirtualHost \*:80>/<VirtualHost *:${port}>/" /etc/apache2/sites-available/000-default.conf
+if [ -n "${RAILWAY_ENVIRONMENT_NAME:-}${RAILWAY_PUBLIC_DOMAIN:-}${RAILWAY_SERVICE_ID:-}" ] && [ -z "${DATABASE_PATH:-}" ]; then
+  echo "DATABASE_PATH must point to the Railway persistent volume; refusing ephemeral production storage." >&2
+  exit 1
+fi
 database_path="${DATABASE_PATH:-/var/www/html/shop_database.sqlite}"
 case "$database_path" in
   sqlite:*) database_path="${database_path#sqlite:}" ;;
 esac
+if [ -n "${RAILWAY_ENVIRONMENT_NAME:-}${RAILWAY_PUBLIC_DOMAIN:-}${RAILWAY_SERVICE_ID:-}" ]; then
+  case "$database_path" in
+    /*) ;;
+    *) echo "DATABASE_PATH must be an absolute path on a Railway persistent volume." >&2; exit 1 ;;
+  esac
+fi
 case "$database_path" in
   /*)
     database_dir=$(dirname "$database_path")
-    mkdir -p "$database_dir" 2>/dev/null || true
+    if ! mkdir -p "$database_dir" 2>/dev/null; then
+      echo "Could not create DATABASE_PATH directory: $database_dir" >&2
+      exit 1
+    fi
     chown www-data:www-data "$database_dir" 2>/dev/null || true
     if [ -f "$database_path" ]; then chown www-data:www-data "$database_path" 2>/dev/null || true; fi
+    if [ ! -w "$database_dir" ]; then
+      echo "Apache cannot write to DATABASE_PATH directory: $database_dir" >&2
+      exit 1
+    fi
     ;;
 esac
 if [ -d /data ]; then

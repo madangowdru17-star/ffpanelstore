@@ -2,7 +2,7 @@
 $pageTitle='Create account | HEX CHEATS SHOP';
 $activePage='account';
 $next=(string)($_GET['next']??'/account');
-if($next===''||strlen($next)>2000||!str_starts_with($next,'/')||str_starts_with($next,'//')||str_contains($next,'\\')||preg_match('/[\x00-\x20\x7f]/',$next)||preg_match('#^/(?:login|register)(?:[/?#]|$)#i',$next))$next='/account';
+if($next===''||strlen($next)>2000||!str_starts_with($next,'/')||str_starts_with($next,'//')||str_contains($next,'\\')||preg_match('/[\x00-\x20\x7f]/',$next)||preg_match('~^/(?:login|register)(?:[/?#]|$)~i',$next))$next='/account';
 $nextJson=json_encode($next,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT);
 $googleUrl='/auth/google?next='.rawurlencode($next);
 $loginUrl='/login?next='.rawurlencode($next);

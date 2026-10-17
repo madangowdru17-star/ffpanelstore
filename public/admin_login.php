@@ -20,7 +20,7 @@ const form=document.getElementById('loginForm');
 form.addEventListener('submit',async event=>{
   event.preventDefault();const button=document.getElementById('submit'),error=document.getElementById('error');button.disabled=true;error.textContent='';
   const key=document.getElementById('key').value;const payload=key?{key}:{email:document.getElementById('email').value.trim(),password:document.getElementById('password').value};
-  try{const response=await fetch('/admin/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});let data={};try{data=await response.json()}catch{}if(!response.ok)throw new Error(data.error||'Sign in failed.');localStorage.setItem('hex_admin_token',data.token);location.href='/admin/catalog'}
+  try{const response=await fetch('/admin/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),credentials:'same-origin'});let data={};try{data=await response.json()}catch{}if(!response.ok)throw new Error(data.error||'Sign in failed.');location.href='/admin/catalog'}
   catch(e){error.textContent=e.message||'Sign in failed.'}finally{button.disabled=false}
 });
 </script></body></html>

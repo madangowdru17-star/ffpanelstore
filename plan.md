@@ -14,7 +14,7 @@ Continue only in the existing `madangowdru17-star/ffpanelstore` repository. Keep
 - `src/Database.php` adds in-place Google subject/browser-bound short-lived OAuth-state migrations and an additive direct-crypto-checkout proof table to the existing database.
 - `public/pages/` contains 10+ focused PHP-rendered customer pages and reusable layout partials. Each uses one shared header/footer/bottom-nav and design-token stylesheet.
 - `public/assets/css/` and `public/assets/js/` hold shared color themes, light/dark preference handling, the responsive account drawer/tab behavior, and page-specific payment/proof behaviour.
-- Existing `public/storefront.php`, `public/storefront.js`, and admin PHP screens remain the operational home/admin surfaces; add common theme controls and links without changing FamGateway or reseller integration semantics.
+- Existing `public/storefront.php`, `public/storefront.js`, and admin PHP screens remain the operational home/admin surfaces. Keep the existing three-line menu and route its account control to the account page; do not create a duplicate profile/wallet/history panel on the homepage. Preserve current visual concept and payment/reseller integration semantics.
 
 ## Design
 
@@ -34,3 +34,7 @@ Continue only in the existing `madangowdru17-star/ffpanelstore` repository. Keep
 ## Authentication and payments
 
 Google Sign-In must use the supplied OAuth client ID through environment configuration, but the client secret pasted into the chat must not be committed or hardcoded and should be rotated in Google Cloud. Use redirect URI `https://ffpanelstore.up.railway.app/auth/google/callback`. Verify `state`, PKCE, token audience, issuer, expiry, verified email and subject before linking/signing in. Keep existing email/password accounts, FamGateway checkout and wallet contracts, and reseller delivery safeguards. Add Binance USD and USDT/BEP20 QR/proof review using the existing database, and after admin verification only, route direct crypto product purchases through the existing supplier delivery helper.
+
+## Current repair scope
+
+Retain the current project structure and green/ivory shop design. Fix verified route, form and navigation defects rather than replatforming or adding files for count. In the payment flow, persist and bind payment intents before external provider side effects, require exact safe payment-status values and amount checks, prevent transaction-ID reuse across manual proof flows, and keep delivery/credit behind successful verification or admin approval. Preserve existing FamGateway/reseller payload contracts unless the provider's published contract confirms a safe additive change. Do not fabricate an unsupported callback signature or provider endpoint: retain CSRF-protected status verification until the provider contract is available. Production-only behavior remains conditional on the actual Railway environment, persistent volume, domain/proxy settings and provider credentials.

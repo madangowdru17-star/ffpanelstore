@@ -27,24 +27,60 @@ final class Wallet
         if ($amount < 50 || $amount > 50000) {
             throw new HttpError('Choose a top-up amount between ₹50 and ₹50,000.', 400);
         }
+        $idempotencyKey = trim((string) ($body['idempotency_key'] ?? ''));
+        if (!preg_match('/^[A-Za-z0-9_-]{16,64}$/', $idempotencyKey)) {
+            throw new HttpError('Payment request expired. Please start the top-up again.', 400);
+        }
+        if (Integrations::paymentKey() === '') {
+            throw new HttpError('Online payments are not configured yet. Please contact the shop administrator.', 503);
+        }
         $orderId = 'WLT' . strtoupper(bin2hex(random_bytes(8)));
+        $pdo = Database::pdo();
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $existing = Database::row('SELECT * FROM store_wallet_topups WHERE account_id=? AND idempotency_key=?', [$accountId, $idempotencyKey]);
+            if ($existing) {
+                if ((string) $existing['payment_method'] !== 'upi' || abs((float) $existing['amount_inr'] - $amount) > 0.001) {
+                    throw new HttpError('This payment request key was already used for different details. Start a new top-up.', 409);
+                }
+                $pdo->exec('COMMIT');
+                if ((string) $existing['status'] !== 'pending') {
+                    throw new HttpError('This payment request is already being processed or has been reviewed. Check its status before retrying.', 409);
+                }
+                return [
+                    'ok' => true, 'order_id' => (string) $existing['order_id'], 'amount_inr' => (float) $existing['amount_inr'],
+                    'payment_url' => (string) $existing['payment_url'],
+                    'qr_url' => '/api/store/wallet/topups/' . rawurlencode((string) $existing['order_id']) . '/qr',
+                    'status' => (string) $existing['status'], 'replayed' => true,
+                ];
+            }
+            $now = time();
+            $pdo->prepare(
+                'INSERT INTO store_wallet_topups(order_id,account_id,amount_inr,provider_order_id,payment_url,status,created_at,updated_at,payment_method,idempotency_key) '
+                . "VALUES(?,?,?,'','',?,?,?,?,?)"
+            )->execute([$orderId, $accountId, $amount, 'initiating', $now, $now, 'upi', $idempotencyKey]);
+            $pdo->exec('COMMIT');
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
+            }
+            throw $e;
+        }
+
         try {
             $provider = Integrations::createPaymentOrder($amount, $orderId, 'Wallet top-up');
-        } catch (HttpError $e) {
-            throw $e;
+            $paymentUrl = Integrations::paymentUrl($provider);
+            if ($paymentUrl !== '' && (!filter_var($paymentUrl, FILTER_VALIDATE_URL) || strtolower((string) parse_url($paymentUrl, PHP_URL_SCHEME)) !== 'https')) {
+                throw new RuntimeException('The payment provider returned an invalid checkout link.');
+            }
+            $providerId = Integrations::providerOrderId($provider, $orderId);
         } catch (Throwable) {
-            throw new HttpError('The payment provider is temporarily unavailable.', 502);
+            $pdo->prepare("UPDATE store_wallet_topups SET status='provider_unknown',updated_at=? WHERE order_id=? AND status='initiating'")
+                ->execute([time(), $orderId]);
+            throw new HttpError('The provider could not confirm whether this payment request was created. Do not retry payment; contact the shop administrator with reference ' . $orderId . '.', 502);
         }
-        $paymentUrl = Integrations::paymentUrl($provider);
-        if ($paymentUrl !== '' && (!filter_var($paymentUrl, FILTER_VALIDATE_URL) || strtolower((string) parse_url($paymentUrl, PHP_URL_SCHEME)) !== 'https')) {
-            throw new HttpError('The payment provider returned an invalid checkout link.', 502);
-        }
-        $providerId = Integrations::providerOrderId($provider, $orderId);
-        $now = time();
-        Database::pdo()->prepare(
-            'INSERT INTO store_wallet_topups(order_id,account_id,amount_inr,provider_order_id,payment_url,status,created_at,updated_at) '
-            . 'VALUES(?,?,?,?,?,?,?,?)'
-        )->execute([$orderId, $accountId, $amount, $providerId, $paymentUrl, 'pending', $now, $now]);
+        $pdo->prepare("UPDATE store_wallet_topups SET provider_order_id=?,payment_url=?,status='pending',updated_at=? WHERE order_id=? AND status='initiating'")
+            ->execute([$providerId, $paymentUrl, time(), $orderId]);
         return [
             'ok' => true, 'order_id' => $orderId, 'amount_inr' => $amount,
             'payment_url' => $paymentUrl, 'qr_url' => '/api/store/wallet/topups/' . rawurlencode($orderId) . '/qr',
@@ -52,13 +88,13 @@ final class Wallet
         ];
     }
 
-    public static function topupStatus(int $accountId, string $orderId): array
+    public static function topupStatus(int $accountId, string $orderId, bool $verify = false): array
     {
         $topup = Database::row('SELECT * FROM store_wallet_topups WHERE order_id = ? AND account_id = ?', [$orderId, $accountId]);
         if (!$topup) {
             throw new HttpError('Wallet top-up not found.', 404);
         }
-        if ($topup['status'] === 'pending') {
+        if ($verify && $topup['status'] === 'pending') {
             $response = null;
             foreach (array_unique(array_filter([(string) $topup['provider_order_id'], (string) $topup['order_id']])) as $candidate) {
                 $response = Integrations::checkPaymentStatus($candidate);
@@ -114,6 +150,10 @@ final class Wallet
     private static function createManualCryptoTopup(int $accountId, array $body, string $method): array
     {
         $methodName = $method === 'usdt_bep20' ? 'USDT' : 'Binance';
+        $idempotencyKey = trim((string) ($body['idempotency_key'] ?? ''));
+        if (!preg_match('/^[A-Za-z0-9_-]{16,64}$/', $idempotencyKey)) {
+            throw new HttpError('Payment request expired. Please start the top-up again.', 400);
+        }
         $raw = $body['amount_usd'] ?? null;
         if (!is_scalar($raw) || !is_numeric((string) $raw)) {
             throw new HttpError('Enter a valid ' . $methodName . ' amount.', 400);
@@ -126,17 +166,40 @@ final class Wallet
         if (empty($config['available'])) {
             throw new HttpError($methodName . ' payment QR is not ready. The shop administrator must upload its QR image.', 503);
         }
-        $inrPerUsd = self::usdToInrRate();
-        $amountInr = round($amountUsd * $inrPerUsd, 2);
-        if ($amountInr <= 0 || $amountInr > 50000) {
-            throw new HttpError('This ' . $methodName . ' amount is outside the supported wallet top-up range.', 400);
+        $pdo = Database::pdo();
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $existing = Database::row('SELECT * FROM store_wallet_topups WHERE account_id=? AND idempotency_key=?', [$accountId, $idempotencyKey]);
+            if ($existing) {
+                if ((string) $existing['payment_method'] !== $method || abs((float) $existing['amount_usd'] - $amountUsd) > 0.001) {
+                    throw new HttpError('This payment request key was already used for different details. Start a new top-up.', 409);
+                }
+                $orderId = (string) $existing['order_id'];
+                $amountInr = (float) $existing['amount_inr'];
+                $inrPerUsd = (float) $existing['exchange_rate_inr'];
+                $status = (string) $existing['status'];
+                $pdo->exec('COMMIT');
+            } else {
+                $inrPerUsd = self::usdToInrRate();
+                $amountInr = round($amountUsd * $inrPerUsd, 2);
+                if ($amountInr <= 0 || $amountInr > 50000) {
+                    throw new HttpError('This ' . $methodName . ' amount is outside the supported wallet top-up range.', 400);
+                }
+                $orderId = ($method === 'usdt_bep20' ? 'USD' : 'BNZ') . strtoupper(bin2hex(random_bytes(8)));
+                $now = time();
+                $pdo->prepare(
+                    'INSERT INTO store_wallet_topups(order_id,account_id,amount_inr,provider_order_id,payment_url,status,transaction_id,created_at,updated_at,payment_method,amount_usd,exchange_rate_inr,idempotency_key) '
+                    . "VALUES(?,?,?,'','','manual_pending','',?,?,?,?,?,?)"
+                )->execute([$orderId, $accountId, $amountInr, $now, $now, $method, $amountUsd, $inrPerUsd, $idempotencyKey]);
+                $status = 'manual_pending';
+                $pdo->exec('COMMIT');
+            }
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
+            }
+            throw $e;
         }
-        $orderId = ($method === 'usdt_bep20' ? 'USD' : 'BNZ') . strtoupper(bin2hex(random_bytes(8)));
-        $now = time();
-        Database::pdo()->prepare(
-            'INSERT INTO store_wallet_topups(order_id,account_id,amount_inr,provider_order_id,payment_url,status,transaction_id,created_at,updated_at,payment_method,amount_usd,exchange_rate_inr) '
-            . "VALUES(?,?,?,'','','manual_pending','',?,?,?,?,?)"
-        )->execute([$orderId, $accountId, $amountInr, $now, $now, $method, $amountUsd, $inrPerUsd]);
         return [
             'ok' => true,
             'order_id' => $orderId,
@@ -146,7 +209,7 @@ final class Wallet
             'qr_url' => (string) $config['qr_url'],
             'instructions' => (string) $config['instructions'],
             'payment_method' => $method,
-            'status' => 'manual_pending',
+            'status' => $status,
         ];
     }
 
@@ -182,28 +245,36 @@ final class Wallet
             throw new HttpError('Screenshot dimensions are invalid or too large.', 400);
         }
         $filename = substr(basename((string) ($file['name'] ?? 'payment-proof')), 0, 255);
-        $statement = Database::pdo()->prepare(
-            "UPDATE store_wallet_topups SET status='proof_submitted',proof_data=?,proof_content_type=?,proof_filename=?,proof_txid=?,transaction_id=?,updated_at=? "
-            . "WHERE order_id=? AND account_id=? AND payment_method IN ('binance','usdt_bep20') AND status='manual_pending'"
-        );
-        $statement->bindValue(1, $bytes, PDO::PARAM_LOB);
-        $statement->bindValue(2, $mime);
-        $statement->bindValue(3, $filename);
-        $statement->bindValue(4, $txid);
-        $statement->bindValue(5, $txid);
-        $statement->bindValue(6, time(), PDO::PARAM_INT);
-        $statement->bindValue(7, $orderId);
-        $statement->bindValue(8, $accountId, PDO::PARAM_INT);
+        $pdo = Database::pdo();
+        $pdo->exec('BEGIN IMMEDIATE');
         try {
+            $fresh = Database::row('SELECT status FROM store_wallet_topups WHERE order_id=? AND account_id=?', [$orderId, $accountId]);
+            if (!$fresh || (string) $fresh['status'] !== 'manual_pending') {
+                throw new HttpError('Proof has already been submitted or this request was reviewed.', 409);
+            }
+            Database::reservePaymentTxid($txid, 'wallet', $orderId);
+            $statement = $pdo->prepare(
+                "UPDATE store_wallet_topups SET status='proof_submitted',proof_data=?,proof_content_type=?,proof_filename=?,proof_txid=?,transaction_id=?,updated_at=? "
+                . "WHERE order_id=? AND account_id=? AND payment_method IN ('binance','usdt_bep20') AND status='manual_pending'"
+            );
+            $statement->bindValue(1, $bytes, PDO::PARAM_LOB);
+            $statement->bindValue(2, $mime);
+            $statement->bindValue(3, $filename);
+            $statement->bindValue(4, $txid);
+            $statement->bindValue(5, $txid);
+            $statement->bindValue(6, time(), PDO::PARAM_INT);
+            $statement->bindValue(7, $orderId);
+            $statement->bindValue(8, $accountId, PDO::PARAM_INT);
             $statement->execute();
-        } catch (PDOException $e) {
-            if ((int) ($e->errorInfo[1] ?? 0) === 19) {
-                throw new HttpError('That crypto transaction ID has already been submitted.', 409);
+            if ($statement->rowCount() !== 1) {
+                throw new HttpError('Proof could not be saved because the request changed. Refresh and check its status.', 409);
+            }
+            $pdo->exec('COMMIT');
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
             }
             throw $e;
-        }
-        if ($statement->rowCount() !== 1) {
-            throw new HttpError('Proof could not be saved because the request changed. Refresh and check its status.', 409);
         }
         return ['ok' => true, 'order_id' => $orderId, 'status' => 'proof_submitted'];
     }
@@ -211,7 +282,7 @@ final class Wallet
     public static function paymentHistory(int $accountId): array
     {
         return Database::rows(
-            'SELECT order_id,payment_method,amount_inr,amount_usd,status,transaction_id,proof_txid,review_note,created_at,reviewed_at '
+            'SELECT order_id,payment_method,amount_inr,amount_usd,payment_url,status,transaction_id,proof_txid,review_note,created_at,reviewed_at '
             . 'FROM store_wallet_topups WHERE account_id=? ORDER BY created_at DESC LIMIT 50',
             [$accountId]
         );
@@ -440,9 +511,11 @@ final class Wallet
 
     private static function paymentSuccessful(string $status): bool
     {
-        return in_array($status, ['success', 'successful', 'paid', 'completed', 'verified', 'captured'], true)
-            || str_contains($status, 'paid') || str_contains($status, 'success') || str_contains($status, 'completed')
-            || str_contains($status, 'verified') || str_contains($status, 'captured');
+        return in_array($status, [
+            'success', 'successful', 'paid', 'completed', 'verified', 'captured',
+            'payment_success', 'payment_successful', 'payment_paid', 'payment_completed',
+            'transaction_success', 'transaction_successful', 'order_paid', 'order_completed',
+        ], true);
     }
 
     private static function paymentFailed(string $status): bool

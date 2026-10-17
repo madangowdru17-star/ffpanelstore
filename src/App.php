@@ -6,13 +6,25 @@ final class App
     public static function run(): void
     {
         try {
+            header('X-Content-Type-Options: nosniff');
+            header('Referrer-Policy: strict-origin-when-cross-origin');
+            header('X-Frame-Options: DENY');
+            $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+            $path = rawurldecode((string) (parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?: '/'));
+            if ($method === 'GET' && $path === '/healthz') {
+                self::json(['ok' => true]);
+                return;
+            }
+            if ($method === 'GET' && $path === '/readyz') {
+                Database::initialize();
+                Database::pdo()->query('SELECT 1')->fetchColumn();
+                self::json(['ok' => true, 'database' => 'ready']);
+                return;
+            }
             Database::initialize();
             Homepage::seedDefaultPaymentAssets();
             Catalog::ensureSeeded();
             Auth::bootstrapAdmin();
-            header('X-Content-Type-Options: nosniff');
-            header('Referrer-Policy: strict-origin-when-cross-origin');
-            header('X-Frame-Options: DENY');
             self::dispatch();
         } catch (HttpError $e) {
             self::json(['error' => $e->getMessage()], $e->status);
@@ -172,6 +184,15 @@ final class App
             echo $image['body'];
             return;
         }
+        if ($method === 'POST' && preg_match('#^/api/store/wallet/topups/([A-Za-z0-9_-]{4,80})/verify$#', $path, $match)) {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in to verify payment status.', 401);
+            }
+            Auth::requireCsrf($account);
+            self::json(Wallet::topupStatus((int) $account['id'], $match[1], true));
+            return;
+        }
         if ($method === 'GET' && preg_match('#^/api/store/wallet/topups/([A-Za-z0-9_-]{4,80})$#', $path, $match)) {
             $account = Auth::current();
             if (!$account) {
@@ -213,6 +234,15 @@ final class App
             self::checkoutFromWallet();
             return;
         }
+        if ($method === 'POST' && preg_match('#^/api/store/checkouts/([A-Za-z0-9_-]{4,80})/verify$#', $path, $match)) {
+            $account = Auth::current();
+            if (!$account) {
+                throw new HttpError('Sign in to verify order status.', 401);
+            }
+            Auth::requireCsrf($account);
+            self::checkoutStatus($match[1], true);
+            return;
+        }
         if ($method === 'GET' && preg_match('#^/api/store/checkouts/([A-Za-z0-9_-]{4,80})$#', $path, $match)) {
             self::checkoutStatus($match[1]);
             return;
@@ -228,6 +258,11 @@ final class App
 
         if ($method === 'POST' && $path === '/admin/api/login') {
             self::json(Auth::adminLogin(self::body()));
+            return;
+        }
+        if ($method === 'POST' && $path === '/admin/api/logout') {
+            Auth::requireAdmin();
+            self::json(Auth::adminLogout());
             return;
         }
         if (str_starts_with($path, '/admin/api/')) {
@@ -509,6 +544,10 @@ final class App
         $body = self::body();
         $key = trim((string) ($body['product_key'] ?? ''));
         $duration = trim((string) ($body['duration'] ?? ''));
+        $idempotencyKey = trim((string) ($body['idempotency_key'] ?? ''));
+        if (!preg_match('/^[A-Za-z0-9_-]{16,64}$/', $idempotencyKey)) {
+            throw new HttpError('Checkout session expired. Please start the purchase again.', 400);
+        }
         $product = Catalog::effective($key);
         if (empty($product['enabled']) || !empty($product['maintenance'])) {
             throw new HttpError('This product is currently unavailable.', 409);
@@ -524,28 +563,62 @@ final class App
         if ($stock !== null && is_numeric(str_replace(',', '', (string) $stock)) && (float) str_replace(',', '', (string) $stock) <= 0) {
             throw new HttpError('This option is currently out of stock.', 409);
         }
+        $apiDuration = (string) ($product['api_duration'][$duration] ?? $duration);
+        if (Integrations::paymentKey() === '') {
+            throw new HttpError('Online payments are not configured yet. Please contact the shop administrator.', 503);
+        }
+        $pdo = Database::pdo();
         $orderId = 'WEB' . strtoupper(bin2hex(random_bytes(8)));
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $existing = Database::row('SELECT * FROM store_checkouts WHERE account_id=? AND idempotency_key=?', [(int) $account['id'], $idempotencyKey]);
+            if ($existing) {
+                $hasCryptoProof = Database::row('SELECT order_id FROM store_checkout_crypto_proofs WHERE order_id=?', [(string) $existing['order_id']]);
+                if ((string) $existing['product_key'] !== $key || (string) $existing['duration'] !== $duration
+                    || abs((float) $existing['amount_inr'] - $amount) > 0.001 || $hasCryptoProof
+                    || (string) $existing['transaction_id'] === 'WALLET') {
+                    throw new HttpError('This checkout key was already used for different purchase details. Start checkout again.', 409);
+                }
+                $pdo->exec('COMMIT');
+                if ((string) $existing['status'] !== 'pending') {
+                    throw new HttpError('This checkout is already processing or complete. Check its status before starting another payment.', 409);
+                }
+                self::json([
+                    'ok' => true, 'order_id' => (string) $existing['order_id'], 'product_name' => (string) $existing['product_name'],
+                    'payment_url' => (string) $existing['payment_url'], 'qr_url' => '/api/store/checkouts/' . rawurlencode((string) $existing['order_id']) . '/qr',
+                    'amount_inr' => (float) $existing['amount_inr'], 'status' => 'pending', 'replayed' => true,
+                ], 200);
+                return;
+            }
+            $now = time();
+            $pdo->prepare(
+                'INSERT INTO store_checkouts(order_id,account_id,product_key,product_id,product_name,duration,api_duration,amount_inr,provider_order_id,payment_url,idempotency_key,status,created_at,updated_at) '
+                . "VALUES(?,?,?,?,?,?,?,?,'','',?,'initiating',?,?)"
+            )->execute([
+                $orderId, (int) $account['id'], $key, (string) ($product['id'] ?? ''), (string) ($product['name'] ?? $key),
+                $duration, $apiDuration, $amount, $idempotencyKey, $now, $now,
+            ]);
+            $pdo->exec('COMMIT');
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->exec('ROLLBACK');
+            }
+            throw $e;
+        }
         try {
             $provider = Integrations::createPaymentOrder($amount, $orderId, (string) ($account['display_name'] ?: $account['email'] ?: 'Shop customer'));
-        } catch (HttpError $e) {
-            throw $e;
+            $paymentUrl = Integrations::paymentUrl($provider);
+            if ($paymentUrl !== '' && (!filter_var($paymentUrl, FILTER_VALIDATE_URL) || strtolower((string) parse_url($paymentUrl, PHP_URL_SCHEME)) !== 'https')) {
+                throw new RuntimeException('The payment provider returned an invalid checkout link.');
+            }
+            $providerId = Integrations::providerOrderId($provider, $orderId);
         } catch (Throwable) {
-            throw new HttpError('The payment provider is temporarily unavailable.', 502);
+            $pdo->prepare("UPDATE store_checkouts SET status='provider_unknown',updated_at=? WHERE order_id=? AND status='initiating'")
+                ->execute([time(), $orderId]);
+            throw new HttpError('The provider could not confirm whether checkout was created. Do not retry payment; contact the shop administrator with reference ' . $orderId . '.', 502);
         }
-        $paymentUrl = Integrations::paymentUrl($provider);
-        if ($paymentUrl !== '' && (!filter_var($paymentUrl, FILTER_VALIDATE_URL) || strtolower((string) parse_url($paymentUrl, PHP_URL_SCHEME)) !== 'https')) {
-            throw new HttpError('The payment provider returned an invalid checkout link.', 502);
-        }
-        $providerId = Integrations::providerOrderId($provider, $orderId);
-        $now = time();
-        $apiDuration = (string) ($product['api_duration'][$duration] ?? $duration);
-        Database::pdo()->prepare(
-            'INSERT INTO store_checkouts(order_id,account_id,product_key,product_id,product_name,duration,api_duration,amount_inr,provider_order_id,payment_url,status,created_at,updated_at) '
-            . 'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)'
-        )->execute([
-            $orderId, (int) $account['id'], $key, (string) ($product['id'] ?? ''), (string) ($product['name'] ?? $key),
-            $duration, $apiDuration, $amount, $providerId, $paymentUrl, 'pending', $now, $now,
-        ]);
+        $pdo->prepare("UPDATE store_checkouts SET provider_order_id=?,payment_url=?,status='pending',updated_at=? WHERE order_id=? AND status='initiating'")
+            ->execute([$providerId, $paymentUrl, time(), $orderId]);
         self::json([
             'ok' => true, 'order_id' => $orderId, 'product_name' => (string) ($product['name'] ?? $key),
             'payment_url' => $paymentUrl, 'qr_url' => '/api/store/checkouts/' . rawurlencode($orderId) . '/qr',
@@ -606,7 +679,9 @@ final class App
             $existing = Database::row('SELECT * FROM store_checkouts WHERE account_id=? AND idempotency_key=?', [(int) $account['id'], $idempotencyKey]);
             if ($existing) {
                 $proof = Database::row('SELECT payment_method,amount_usd,exchange_rate_inr,status FROM store_checkout_crypto_proofs WHERE order_id=?', [(string) $existing['order_id']]);
-                if (!$proof || (string) $proof['payment_method'] !== $method) {
+                if (!$proof || (string) $proof['payment_method'] !== $method
+                    || (string) $existing['product_key'] !== $key || (string) $existing['duration'] !== $duration
+                    || abs((float) $existing['amount_inr'] - $amount) > 0.001) {
                     throw new HttpError('This checkout session is already in use. Start the purchase again.', 409);
                 }
                 $pdo->exec('COMMIT');
@@ -670,9 +745,6 @@ final class App
         if ($width < 1 || $height < 1 || $width * $height > 20000000) {
             throw new HttpError('Screenshot dimensions are invalid or too large.', 400);
         }
-        if (Database::row('SELECT 1 AS found FROM store_wallet_topups WHERE proof_txid=?', [$txid])) {
-            throw new HttpError('That transaction ID has already been submitted.', 409);
-        }
         $filename = substr(basename((string) ($file['name'] ?? 'payment-proof')), 0, 255);
         $pdo = Database::pdo();
         $pdo->exec('BEGIN IMMEDIATE');
@@ -687,6 +759,7 @@ final class App
             if ((string) $order['status'] !== 'manual_pending' || (string) $order['proof_status'] !== 'manual_pending') {
                 throw new HttpError('Proof has already been submitted or this request was reviewed.', 409);
             }
+            Database::reservePaymentTxid($txid, 'checkout', $orderId);
             $proof = $pdo->prepare("UPDATE store_checkout_crypto_proofs SET status='proof_submitted',proof_txid=?,proof_data=?,proof_content_type=?,proof_filename=?,updated_at=? WHERE order_id=? AND status='manual_pending'");
             $proof->bindValue(1, $txid);
             $proof->bindValue(2, $bytes, PDO::PARAM_LOB);
@@ -758,6 +831,12 @@ final class App
         try {
             $existing = Database::row('SELECT * FROM store_checkouts WHERE account_id=? AND idempotency_key=?', [(int) $account['id'], $idempotencyKey]);
             if ($existing) {
+                $cryptoProof = Database::row('SELECT order_id FROM store_checkout_crypto_proofs WHERE order_id=?', [(string) $existing['order_id']]);
+                if ((string) $existing['product_key'] !== $key || (string) $existing['duration'] !== $duration
+                    || abs((float) $existing['amount_inr'] - $amount) > 0.001 || $cryptoProof
+                    || (string) $existing['transaction_id'] !== 'WALLET') {
+                    throw new HttpError('This checkout key was already used for different purchase details. Start checkout again.', 409);
+                }
                 $pdo->exec('COMMIT');
                 $outcome = self::deliverCheckout($existing, (string) ($existing['transaction_id'] ?: 'WALLET'));
                 $snapshot = Wallet::snapshot((int) $account['id']);
@@ -812,7 +891,7 @@ final class App
         ], 201);
     }
 
-    private static function checkoutStatus(string $orderId): void
+    private static function checkoutStatus(string $orderId, bool $verify = false): void
     {
         $account = Auth::current();
         if (!$account) {
@@ -822,11 +901,11 @@ final class App
         if (!$row) {
             throw new HttpError('Order not found.', 404);
         }
-        if ($row['status'] === 'wallet_paid') {
+        if ($verify && $row['status'] === 'wallet_paid') {
             $outcome = self::deliverCheckout($row, (string) $row['transaction_id']);
             $row['status'] = $outcome['status'];
             $row['delivery_key'] = $outcome['key'] ?? '';
-        } elseif ($row['status'] === 'pending') {
+        } elseif ($verify && $row['status'] === 'pending') {
             $response = null;
             foreach (array_unique(array_filter([(string) $row['provider_order_id'], (string) $row['order_id']])) as $candidate) {
                 $response = Integrations::checkPaymentStatus($candidate);
@@ -898,8 +977,8 @@ final class App
             throw new HttpError('Sign in to view your orders.', 401);
         }
         $rows = Database::rows(
-            "SELECT o.order_id,o.product_name,o.duration,o.amount,o.status,o.delivery_key,o.created_at,o.transaction_id,COALESCE(p.payment_method,'upi') AS payment_method FROM store_orders o LEFT JOIN store_checkout_crypto_proofs p ON p.order_id=o.order_id WHERE o.account_id=? "
-            . "UNION ALL SELECT c.order_id,c.product_name,c.duration,c.amount_inr AS amount,c.status,'' AS delivery_key,c.created_at,c.transaction_id,COALESCE(p.payment_method,'upi') AS payment_method FROM store_checkouts c LEFT JOIN store_checkout_crypto_proofs p ON p.order_id=c.order_id WHERE c.account_id=? AND c.status!='complete' "
+            "SELECT o.order_id,o.product_name,o.duration,o.amount,o.status,o.delivery_key,o.created_at,o.transaction_id,COALESCE(p.payment_method,'upi') AS payment_method,'' AS payment_url FROM store_orders o LEFT JOIN store_checkout_crypto_proofs p ON p.order_id=o.order_id WHERE o.account_id=? "
+            . "UNION ALL SELECT c.order_id,c.product_name,c.duration,c.amount_inr AS amount,c.status,'' AS delivery_key,c.created_at,c.transaction_id,COALESCE(p.payment_method,'upi') AS payment_method,c.payment_url FROM store_checkouts c LEFT JOIN store_checkout_crypto_proofs p ON p.order_id=c.order_id WHERE c.account_id=? AND c.status!='complete' "
             . 'ORDER BY 7 DESC LIMIT 100',
             [(int) $account['id'], (int) $account['id']]
         );
@@ -1236,9 +1315,11 @@ final class App
 
     private static function paymentSuccessful(string $status): bool
     {
-        return in_array($status, ['success', 'successful', 'paid', 'completed', 'verified', 'captured'], true)
-            || str_contains($status, 'paid') || str_contains($status, 'success') || str_contains($status, 'completed')
-            || str_contains($status, 'verified') || str_contains($status, 'captured');
+        return in_array($status, [
+            'success', 'successful', 'paid', 'completed', 'verified', 'captured',
+            'payment_success', 'payment_successful', 'payment_paid', 'payment_completed',
+            'transaction_success', 'transaction_successful', 'order_paid', 'order_completed',
+        ], true);
     }
 
     private static function paymentFailed(string $status): bool

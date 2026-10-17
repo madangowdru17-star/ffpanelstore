@@ -21,7 +21,7 @@
     setTheme(getTheme());
   };
 
-  const navItems=[['/','⌂','Home'],['/add-funds','▰','Add Fund'],['/orders','▣','Order'],['/keys','♙','My Key'],['/account','●','Account']];
+  const navItems=[['/','⌂','Home'],['/add-funds','▰','Add Fund'],['/wallet','▤','Wallet'],['/orders','▣','Orders'],['/keys','♙','My Keys'],['/account','●','Account']];
   const addBottomNav=()=>{
     const path=location.pathname;
     if(path.startsWith('/admin')||path==='/login'||path==='/register'||document.querySelector('.hx-bottom-nav'))return;
