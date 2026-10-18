@@ -1,1 +1,1 @@
-</main><footer class="footer"><span>© <?= date('Y') ?> HEX CHEATS SHOP</span><span><a href="/help">Help</a> · <a href="/terms">Terms</a></span></footer></div></body></html>
+</main><footer class="footer hx-site-footer"><span>© <?= date('Y') ?> HEX CHEATS SHOP</span><span class="hx-footer-trust">Secure checkout · Track payments and orders from your account.</span><span><a href="/help">Help</a> · <a href="/terms">Terms</a></span></footer></div></body></html>

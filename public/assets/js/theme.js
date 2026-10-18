@@ -26,12 +26,13 @@
   const navItems=[['/','home','Home'],['/add-funds','plus','Add Fund'],['/wallet','wallet','Wallet'],['/orders','receipt','Orders'],['/keys','key','My Keys'],['/account','user','Account']];
   const addBottomNav=()=>{
     const path=location.pathname;
+    const activePath=path.startsWith('/pay/')?'/add-funds':path;
     if(path.startsWith('/admin')||document.querySelector('.hx-bottom-nav'))return;
     const nav=document.createElement('nav');nav.className='hx-bottom-nav';nav.setAttribute('aria-label','Main navigation');
     navItems.forEach(([href,icon,label])=>{
       const link=document.createElement('a');link.href=href;
       link.innerHTML='<span class="hx-nav-icon" aria-hidden="true"><svg class="hx-icon"><use href="/assets/icons.svg#'+icon+'"></use></svg></span><span>'+label+'</span>';
-      const active=href==='/'?path==='/'||path.startsWith('/product/'):path===href||path.startsWith(href+'/');
+      const active=href==='/'?activePath==='/'||activePath.startsWith('/product/'):activePath===href||activePath.startsWith(href+'/');
       if(active)link.setAttribute('aria-current','page');nav.append(link);
     });
     document.body.append(nav);
@@ -69,11 +70,11 @@
 
   const bindPageMotion=()=>{
     if(!document.body)return;
-    const pageRoutes=new Set(['/','/add-funds','/wallet','/orders','/keys','/account','/login','/register','/help','/terms']);
+    const pageRoutes=new Set(['/','/add-funds','/pay/upi','/pay/binance','/pay/usdt','/wallet','/orders','/keys','/account','/login','/register','/help','/terms']);
     let activeRequest=null,routeSequence=0;
     const currentPage=()=>document.querySelector('.hx-page-main');
     const updateActiveTab=()=>{
-      const path=['/login','/register'].includes(location.pathname)?'/account':location.pathname;
+      const path=['/login','/register'].includes(location.pathname)?'/account':location.pathname.startsWith('/pay/')?'/add-funds':location.pathname;
       document.querySelectorAll('.hx-bottom-nav a').forEach(link=>{
         const url=new URL(link.href,location.href),active=url.pathname==='/'?path==='/'||path.startsWith('/product/'):path===url.pathname||path.startsWith(url.pathname+'/');
         if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');

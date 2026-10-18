@@ -1,25 +1,24 @@
 # TODO — Website re-audit and repairs
 
-## Current UI-only pass (active request)
+## Current payment UX and footer pass
 
-- [ ] Inspect every customer-facing page/shell, navigation state, tab row, payment option, form, and relevant stylesheet/script before editing. Use the supplied account screenshot to trace the top-control overlap and cross-page tab differences.
-- [ ] Keep the existing project structure, green/ivory concept, products, APIs, pages and working behaviors. Limit this pass to presentation/markup/icon assets. Do not add a duplicate account/profile area or change payment logic, product data, routes, request payloads, status handling or QR configuration.
-- [ ] Remove the redundant top profile icon/control from the shared header while keeping the existing hamburger menu and existing bottom Account destination. Align and space the remaining controls consistently on all pages.
-- [ ] Make shared navigation/tab presentation consistent between home and every customer page; fix horizontal overflow, clipping, overlap, spacing and active states at mobile and desktop breakpoints without breaking the account dashboard’s in-place tabs.
-- [ ] Replace emoji/Unicode glyphs used as UI icons with consistent inline SVG/HTML icons. Keep accessible labels and visible text for navigation and payment actions.
-- [ ] Add the actual logo artwork requested for ALL, NON-ROOT (Android), ROOT (Kitsune Mask) and IOS (Apple) category/filter indicators, with textual labels and accessible descriptions. Keep existing filters and product data intact.
-- [ ] Add locally stored first-party Google Pay, Binance Pay and USDt/Tether logo assets to the relevant existing UPI/Binance/USDT payment-method choices; do not imply a new provider/API integration or change the payment flow.
-- [ ] Re-test all page shells and tab states at mobile widths, including account, wallet, Add Funds, orders, keys, login/register and admin layouts; verify keyboard focus/accessible names and that the rendered logos load locally.
-- [ ] Commit and push only the approved UI/assets/docs changes to the selected repository after checks pass.
+- [x] Keep existing products, product data, database structure, payment endpoints, request payloads, CSRF checks, idempotency rules, provider callbacks/status handling and admin crypto review unchanged.
+- [x] Make UPI, Binance Pay and USDT/BEP20 choices open their own amount-entry payment pages, with the selected method clearly shown and the Add Fund tab remaining active.
+- [x] Show an animated payment-security sequence tied to a fresh signed-in session check and server-side amount/payment-request validation before displaying the QR.
+- [x] Present the exact amount, enlarged local official payment mark, QR/deep link and existing status/proof workflow; preserve UPI provider confirmation and Binance/USDT administrator review, and retain submitted/reviewed proof state across page switching so duplicate proof uploads are not offered.
+- [x] Keep QR content visible above the fixed mobile navigation; verify method choice, payment page, and footer layout at 320px.
+- [x] Add consistent end-of-page text and Help/Terms links to the homepage and shared customer-page footer.
+- [x] Validate changed PHP/JavaScript/SVG sources and run backend payment/session regressions; exercise browser payment flows with mocked provider responses only (no real payment or fulfillment).
+- [ ] Commit and push the approved changes after final checks.
 
 ## Previous source-level fixes already present
 
 - [x] Existing front controller, folders and green/ivory concept kept; duplicate homepage profile/wallet/history panel removed and homepage account control routed to existing account/sign-in flow.
-- [x] Wallet remains accessible in shared mobile navigation; six-destination bottom nav layout added. Existing catalog, prices, images, durations and filters preserved; prior visible Root/Non-root/iOS chips were removed from product cards/details and will now be restored only as requested image-backed category badges in this UI-only pass.
+- [x] Wallet remains accessible in shared mobile navigation; six-destination bottom nav layout added. Existing catalog, prices, images, durations and filters preserved; platform chips use the requested image-backed category indicators.
 - [x] Login/register internal next-path validation corrected.
 - [x] Method-scoped idempotency, exact-positive-status settlement, read-only status GETs, explicit CSRF-protected POST verification, global crypto TXID uniqueness, and authenticated admin proof handling implemented in prior source pass.
 - [x] New admin sessions use HttpOnly same-origin cookies with CSRF checks; Railway `/readyz` and persistent DB startup checks added; public example admin defaults removed.
-- [x] Previous local PHP/JS/shell syntax checks, `git diff --check`, and disposable SQLite HTTP regressions passed. The current UI-only work will rerun focused checks on changed pages/styles/assets.
+- [x] Previous local PHP/JS/shell syntax checks, `git diff --check`, and disposable SQLite HTTP regressions passed. This payment UX pass also reran focused checks on changed pages, scripts, styles and routes.
 
 ## Live-production prerequisites (not safely verifiable in this source-only UI pass)
 
