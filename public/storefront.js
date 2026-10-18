@@ -1,4 +1,7 @@
+(() => {
 'use strict';
+window.__hexStorefrontCleanup?.();
+let pageActive = true;
 
 const $ = id => document.getElementById(id);
 const idemMemory = new Map();
@@ -160,6 +163,7 @@ function openProduct(key) {
 async function loadHomepage() {
   try {
     const data=await request('/api/store/config');homeConfig=data;
+    if (!pageActive) return;
     const shopName=String(data.shop_name||'HEX CHEATS SHOP');
     if($('shopName')?.firstChild)$('shopName').firstChild.textContent=shopName+' ';
     $('footerShopName').textContent=shopName;
@@ -196,6 +200,7 @@ function goSlide(index) {
 async function loadProducts() {
   try {
     const data = await request('/api/store/products');
+    if (!pageActive) return;
     products = data.products || [];
     renderFilterGroups();
     renderProducts();
@@ -594,14 +599,15 @@ $('search').addEventListener('input', renderProducts);
 $('currencySelect').addEventListener('change', event => setCurrency(event.target.value));
 $('heroPrev').addEventListener('click',()=>{clearInterval(carouselTimer);goSlide(activeSlide-1);carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500)});
 $('heroNext').addEventListener('click',()=>{clearInterval(carouselTimer);goSlide(activeSlide+1);carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500)});
-document.addEventListener('click',event=>{
+const onStoreClick=event=>{
   const filter=event.target.closest('[data-store-filter]');
   if(filter){selectedStoreFilter=filter.dataset.storeFilter;filter.classList.remove('tab-tap');void filter.offsetWidth;filter.classList.add('tab-tap');$('catalogGrid').classList.add('is-switching');renderFilterGroups();renderProducts();setTimeout(()=>$('catalogGrid')?.classList.remove('is-switching'),420);return}
   const dot=event.target.closest('[data-slide]');if(dot){clearInterval(carouselTimer);goSlide(Number(dot.dataset.slide));carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500);return}
   const card=event.target.closest('[data-open-product]');if(card)openProduct(card.dataset.openProduct);
   const direct=event.target.closest('[data-detail-open]');if(direct){event.preventDefault();openProduct(direct.dataset.detailOpen);return}
   const cardSurface=event.target.closest('[data-product-url]');if(cardSurface&&!event.target.closest('a,button'))location.href=cardSurface.dataset.productUrl;
-});
+};
+document.addEventListener('click',onStoreClick);
 $('checkPayment').addEventListener('click', pollStatus);
 $('binanceProofForm').addEventListener('submit', submitBinanceProof);
 $('payWalletButton').addEventListener('click', payWithWallet);
@@ -622,3 +628,5 @@ setCurrency(currency);
 loadHomepage();
 loadProducts();
 syncSession();
+window.__hexStorefrontCleanup=()=>{pageActive=false;document.removeEventListener('click',onStoreClick);clearInterval(carouselTimer);clearInterval(pollTimer)};
+})();

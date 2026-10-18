@@ -451,7 +451,7 @@ final class App
         require $file;
         $html = (string) ob_get_clean();
         $headAssets = '<script>(function(){try{var t=localStorage.getItem("hex_shop_theme");document.documentElement.dataset.theme=(t==="dark"||t==="light")?t:"light"}catch(e){document.documentElement.dataset.theme="light"}})();</script><link rel="stylesheet" href="/assets/css/theme.css?v=11">';
-        $bodyAssets = '<script src="/assets/js/theme.js?v=7" defer></script><script src="/assets/js/spa.js?v=1" defer></script>';
+        $bodyAssets = '<script src="/assets/js/theme.js?v=7" defer></script>';
         if (stripos($html, '</head>') !== false) {
             $html = preg_replace('/<\/head>/i', $headAssets . '</head>', $html, 1) ?? $html;
         }

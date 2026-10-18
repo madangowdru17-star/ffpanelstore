@@ -69,17 +69,118 @@
 
   const bindPageMotion=()=>{
     if(!document.body)return;
-    document.body.classList.add('page-enter');
-    requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.add('page-ready')));
-    if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+    const pageRoutes=new Set(['/','/add-funds','/wallet','/orders','/keys','/account','/login','/register','/help','/terms']);
+    let activeRequest=null,routeSequence=0;
+    const currentPage=()=>document.querySelector('.hx-page-main');
+    const updateActiveTab=()=>{
+      const path=['/login','/register'].includes(location.pathname)?'/account':location.pathname;
+      document.querySelectorAll('.hx-bottom-nav a').forEach(link=>{
+        const url=new URL(link.href,location.href),active=url.pathname==='/'?path==='/'||path.startsWith('/product/'):path===url.pathname||path.startsWith(url.pathname+'/');
+        if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
+      });
+    };
+    const activateScripts=async root=>{
+      for(const oldScript of [...root.querySelectorAll('script')]){
+        const script=document.createElement('script');
+        for(const attribute of oldScript.attributes)script.setAttribute(attribute.name,attribute.value);
+        if(oldScript.src){
+          script.async=false;
+          await new Promise(resolve=>{script.onload=resolve;script.onerror=resolve;document.head.append(script)});
+        }else{
+          script.textContent=oldScript.textContent;
+          oldScript.replaceWith(script);
+        }
+      }
+    };
+    const swapPage=async(parsed,url,push,replace)=>{
+      const incoming=parsed.querySelector('.hx-page-main'),existing=currentPage();
+      if(!incoming||!existing)return false;
+      const nextMain=document.importNode(incoming,true),nextFooter=parsed.querySelector('.footer'),footer=document.querySelector('.footer');
+      const nextExtras=parsed.querySelector('#home-overlays'),currentExtras=document.getElementById('home-overlays');
+      const enteringHome=Boolean(nextMain.querySelector('#catalog'));
+      const leavingHome=Boolean(existing.querySelector('#catalog'))&&!enteringHome;
+      const update=async()=>{
+        if(leavingHome)window.__hexStorefrontCleanup?.();
+        existing.replaceWith(nextMain);
+        if(nextFooter&&footer)footer.replaceWith(document.importNode(nextFooter,true));
+        currentExtras?.remove();
+        if(enteringHome&&nextExtras)document.body.append(document.importNode(nextExtras,true));
+        document.head.querySelectorAll('style[data-page-style]').forEach(style=>style.remove());
+        parsed.head.querySelectorAll('style[data-page-style]').forEach(style=>{
+          const copy=document.importNode(style,true),themeLink=document.querySelector('link[href*="/assets/css/theme.css"]');
+          if(themeLink)document.head.insertBefore(copy,themeLink);else document.head.append(copy);
+        });
+        document.title=parsed.title||document.title;
+        const themeColors=parsed.querySelectorAll('meta[name="theme-color"]'),themeColor=themeColors[themeColors.length-1],currentThemeColor=document.querySelector('meta[name="theme-color"]');
+        if(themeColor&&currentThemeColor)currentThemeColor.content=themeColor.content;
+        if(push)history.pushState({hexPage:true},'',url.href);
+        else if(replace)history.replaceState({hexPage:true},'',url.href);
+        updateActiveTab();
+        await activateScripts(nextMain);
+        if(enteringHome){
+          const homeScript=[...parsed.querySelectorAll('script[src]')].find(script=>new URL(script.src,url.href).pathname==='/storefront.js');
+          if(homeScript){const script=document.createElement('script');for(const attribute of homeScript.attributes)script.setAttribute(attribute.name,attribute.value);script.async=false;await new Promise(resolve=>{script.onload=resolve;script.onerror=resolve;document.body.append(script)})}
+        }
+      };
+      if(document.startViewTransition&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
+        const transition=document.startViewTransition(update);await transition.updateCallbackDone;
+      }else{
+        existing.classList.add('route-leaving');
+        await new Promise(resolve=>setTimeout(resolve,matchMedia('(prefers-reduced-motion: reduce)').matches?0:75));
+        await update();nextMain.classList.add('route-entering');
+        requestAnimationFrame(()=>nextMain.classList.remove('route-entering'));
+      }
+      if(url.hash){const target=document.getElementById(decodeURIComponent(url.hash.slice(1)));target?.scrollIntoView({behavior:'smooth',block:'start'})}
+      else window.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+      document.dispatchEvent(new CustomEvent('hex:pagechange',{detail:{url:url.href}}));
+      return true;
+    };
+    const navigate=async(url,{push=true,replace=false}={})=>{
+      if(url.origin!==location.origin||!pageRoutes.has(url.pathname)||!currentPage())return false;
+      activeRequest?.abort();const controller=new AbortController();activeRequest=controller;const sequence=++routeSequence;
+      document.body.classList.add('route-loading');
+      try{
+        const response=await fetch(url.href,{credentials:'same-origin',headers:{'Accept':'text/html'},signal:controller.signal});
+        if(!response.ok)throw new Error('Page request failed');
+        const html=await response.text(),parsed=new DOMParser().parseFromString(html,'text/html');
+        if(sequence!==routeSequence)return true;
+        if(!(await swapPage(parsed,url,push,replace)))return false;
+        return true;
+      }catch(error){if(error.name==='AbortError')return true;return false}
+      finally{if(sequence===routeSequence){activeRequest=null;document.body.classList.remove('route-loading')}}
+    };
+    window.hxGo=(target,{replace=false}={})=>{
+      const url=new URL(target,location.href);
+      return navigate(url,{push:!replace,replace}).then(done=>{
+        if(!done){if(replace)location.replace(url.href);else location.assign(url.href)}
+        return done;
+      });
+    };
     document.addEventListener('click',event=>{
-      const link=event.target.closest('a[href]');
-      if(!link||event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||link.target||link.hasAttribute('download'))return;
-      let url;try{url=new URL(link.href,location.href)}catch{return}
-      if(url.origin!==location.origin||(url.pathname===location.pathname&&url.search===location.search))return;
-      event.preventDefault();document.body.classList.add('page-exit');
-      setTimeout(()=>location.assign(url.href),145);
+      const button=event.target.closest('[data-toggle-pass]');
+      if(!button)return;
+      const input=button.closest('.hx-pass')?.querySelector('input');
+      if(!input)return;
+      const visible=input.type==='password';input.type=visible?'text':'password';
+      button.textContent=visible?'Hide':'Show';
+      button.setAttribute('aria-label',visible?'Hide password':'Show password');
+      button.setAttribute('aria-pressed',String(visible));
     });
+    document.addEventListener('click',async event=>{
+      if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+      const link=event.target.closest('a[href]');
+      if(!link||link.target||link.hasAttribute('download')||link.getAttribute('rel')?.includes('external'))return;
+      let url;try{url=new URL(link.href,location.href)}catch{return}
+      if(url.origin!==location.origin||!pageRoutes.has(url.pathname)||!currentPage()||(url.pathname===location.pathname&&url.search===location.search))return;
+      event.preventDefault();
+      const done=await navigate(url);
+      if(!done)location.assign(url.href);
+    });
+    window.addEventListener('popstate',async()=>{
+      const url=new URL(location.href),done=await navigate(url,{push:false});
+      if(!done)location.reload();
+    });
+    updateActiveTab();
   };
 
   const bindCardTilt=()=>{
