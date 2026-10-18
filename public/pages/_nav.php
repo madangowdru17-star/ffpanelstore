@@ -1,9 +1,9 @@
 <header class="top reference-header">
   <a class="home-icon-btn" href="/" aria-label="Home"><svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#home"></use></svg></a>
-  <a class="brand" href="/" aria-label="HEX CHEATS SHOP home"><span class="site-name-stylish">HEX CHEATS SHOP <small>OFFICIAL DIGITAL STORE</small></span></a>
+  <a class="brand" href="/" aria-label="HEX CHEATS SHOP home"><span class="site-name-stylish" id="shopName">HEX CHEATS SHOP <small>OFFICIAL DIGITAL STORE</small></span></a>
   <nav class="nav" aria-label="Shop navigation">
     <label class="page-currency" aria-label="Display currency">
-      <select data-page-currency>
+      <select id="currencySelect" data-page-currency>
         <option value="INR">INR</option>
         <option value="USD">USD</option>
       </select>
