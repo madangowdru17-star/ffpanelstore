@@ -455,7 +455,7 @@ final class App
         ob_start();
         require $file;
         $html = (string) ob_get_clean();
-        $headAssets = '<script>(function(){try{var t=localStorage.getItem("hex_shop_theme");document.documentElement.dataset.theme=(t==="dark"||t==="light")?t:"light"}catch(e){document.documentElement.dataset.theme="light"}})();</script><link rel="stylesheet" href="/assets/css/theme.css?v=12">';
+        $headAssets = '<script>(function(){try{var t=localStorage.getItem("hex_shop_theme");document.documentElement.dataset.theme=(t==="dark"||t==="light")?t:"light"}catch(e){document.documentElement.dataset.theme="light"}})();</script><link rel="stylesheet" href="/assets/css/theme.css?v=13">';
         $bodyAssets = '<script src="/assets/js/theme.js?v=8" defer></script>';
         if (stripos($html, '</head>') !== false) {
             $html = preg_replace('/<\/head>/i', $headAssets . '</head>', $html, 1) ?? $html;
@@ -764,6 +764,7 @@ final class App
             if ((string) $order['status'] !== 'manual_pending' || (string) $order['proof_status'] !== 'manual_pending') {
                 throw new HttpError('Proof has already been submitted or this request was reviewed.', 409);
             }
+            Database::enforcePaymentProofUploadLimit($accountId);
             Database::reservePaymentTxid($txid, 'checkout', $orderId);
             $proof = $pdo->prepare("UPDATE store_checkout_crypto_proofs SET status='proof_submitted',proof_txid=?,proof_data=?,proof_content_type=?,proof_filename=?,updated_at=? WHERE order_id=? AND status='manual_pending'");
             $proof->bindValue(1, $txid);

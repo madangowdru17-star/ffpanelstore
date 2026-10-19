@@ -153,7 +153,7 @@ function renderProducts() {
     const platform=platformBadge(p);
     const firstStock=firstDuration!==undefined&&p.stock&&p.stock[firstDuration]!==undefined?numberValue(p.stock[firstDuration]):null;
     const outOfStock=firstStock!==null&&firstStock<=0;
-    return `<article class="product reference-product" data-product-url="${escapeHtml(detailUrl)}"><a class="product-image" href="${escapeHtml(detailUrl)}" aria-label="View ${escapeHtml(p.name)} details"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div></a><div class="product-body"><a class="reference-product-title" href="${escapeHtml(detailUrl)}" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</a>${platform}<div class="reference-product-meta">${sold>0?`${sold.toLocaleString()} sold`:'Digital access'}</div><span class="reference-price">${escapeHtml(firstPrice)}</span><div class="reference-card-actions"><a class="button setup-button ${p.download_url?'':'is-unavailable'}" aria-label="${p.download_url?'Open file and setup instructions':'Setup instructions are not configured'}" ${p.download_url?`href="${escapeHtml(p.download_url)}" target="_blank" rel="noopener noreferrer"`:'aria-disabled="true" title="No setup link is configured"'}>${p.download_url?'<svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#download"></use></svg><span>SETUP</span>':'NO SETUP'}</a><button class="button buy-button ${maintenance?'is-maintenance':''}" type="button" aria-label="${maintenance?'Product under maintenance':outOfStock?'Product out of stock':'Buy now'}" data-detail-open="${escapeHtml(p.key)}" ${maintenance||outOfStock?'disabled':''}>${maintenance?'<svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#wrench"></use></svg><span>MAINT.</span>':outOfStock?'SOLD OUT':'<svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#cart"></use></svg><span>BUY</span>'}</button></div></div></article>`;
+    return `<article class="product reference-product"><button class="product-image product-detail-trigger" type="button" data-detail-open="${escapeHtml(p.key)}" aria-label="View ${escapeHtml(p.name)} details" draggable="false"><img src="${escapeHtml(p.image_url||'')}" alt="${escapeHtml(p.name)}" loading="lazy" draggable="false" onload="if(this.naturalWidth)this.nextElementSibling.style.display='none'" onerror="this.remove()"><div class="fallback" aria-hidden="true">${initials}</div></button><div class="product-body"><button class="reference-product-title" type="button" data-detail-open="${escapeHtml(p.key)}" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</button>${platform}<div class="reference-product-meta">${sold>0?`${sold.toLocaleString()} sold`:'Digital access'}</div><span class="reference-price">${escapeHtml(firstPrice)}</span><div class="reference-card-actions"><button class="button buy-button ${maintenance?'is-maintenance':''}" type="button" aria-label="${maintenance?'Product under maintenance':outOfStock?'Product out of stock':'Buy now'}" data-detail-open="${escapeHtml(p.key)}" ${maintenance||outOfStock?'disabled':''}>${maintenance?'<svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#wrench"></use></svg><span>MAINT.</span>':outOfStock?'SOLD OUT':'<svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#cart"></use></svg><span>BUY</span>'}</button></div></div></article>`;
   }).join('');
 }
 function openProduct(key) {
@@ -509,16 +509,24 @@ async function submitBinanceProof(event) {
       ? `/api/store/checkouts/${encodeURIComponent(activeOrder)}/proof`
       : `/api/store/wallet/topups/${encodeURIComponent(activeOrder)}/proof`;
     await request(proofPath, { method: 'POST', body: form });
-    $('binanceTxid').disabled = true;
-    $('binanceProof').disabled = true;
-    $('paymentStatus').textContent = activePaymentType === 'crypto_checkout'
-      ? 'Proof submitted. The product order is held for admin verification; delivery starts only after approval.'
-      : 'Proof submitted. An administrator must verify the transfer before your INR wallet is credited.';
-    await pollStatus();
+    showProofReceiptAndOpenHistory();
   } catch (e) {
     $('paymentStatus').textContent = e.message;
     $('submitBinanceProof').disabled = false;
   }
+}
+function showProofReceiptAndOpenHistory() {
+  const overlay = document.createElement('div');
+  overlay.className = 'hx-proof-success-overlay';
+  overlay.setAttribute('role', 'status');
+  overlay.setAttribute('aria-live', 'assertive');
+  overlay.innerHTML = '<section class="hx-proof-success-card"><span class="hx-proof-success-mark"><svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#check"></use></svg></span><strong>Proof uploaded successfully</strong><p>Payment is awaiting admin verification. Opening Order History…</p></section>';
+  document.body.append(overlay);
+  window.setTimeout(() => {
+    overlay.remove();
+    const target = '/orders?proof=received';
+    if (window.hxGo) window.hxGo(target); else location.assign(target);
+  }, 1000);
 }
 async function pollStatus() {
   if (!activeOrder) return;
@@ -605,9 +613,13 @@ const onStoreClick=event=>{
   const dot=event.target.closest('[data-slide]');if(dot){clearInterval(carouselTimer);goSlide(Number(dot.dataset.slide));carouselTimer=setInterval(()=>goSlide((activeSlide+1)%3),6500);return}
   const card=event.target.closest('[data-open-product]');if(card)openProduct(card.dataset.openProduct);
   const direct=event.target.closest('[data-detail-open]');if(direct){event.preventDefault();openProduct(direct.dataset.detailOpen);return}
-  const cardSurface=event.target.closest('[data-product-url]');if(cardSurface&&!event.target.closest('a,button'))location.href=cardSurface.dataset.productUrl;
 };
 document.addEventListener('click',onStoreClick);
+const catalogGrid = $('catalogGrid');
+const preventProductCallout = event => {
+  if (event.target.closest('.product-image,.reference-product-title')) event.preventDefault();
+};
+catalogGrid?.addEventListener('contextmenu', preventProductCallout);
 $('checkPayment').addEventListener('click', pollStatus);
 $('binanceProofForm').addEventListener('submit', submitBinanceProof);
 $('payWalletButton').addEventListener('click', payWithWallet);
@@ -628,5 +640,5 @@ setCurrency(currency);
 loadHomepage();
 loadProducts();
 syncSession();
-window.__hexStorefrontCleanup=()=>{pageActive=false;document.removeEventListener('click',onStoreClick);clearInterval(carouselTimer);clearInterval(pollTimer)};
+window.__hexStorefrontCleanup=()=>{pageActive=false;document.removeEventListener('click',onStoreClick);catalogGrid?.removeEventListener('contextmenu',preventProductCallout);clearInterval(carouselTimer);clearInterval(pollTimer)};
 })();

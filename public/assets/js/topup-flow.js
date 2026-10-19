@@ -86,6 +86,20 @@
     status.dataset.state = state;
   }
 
+  function showProofReceipt() {
+    const receipt = document.createElement('div');
+    receipt.className = 'hx-proof-success-overlay';
+    receipt.setAttribute('role', 'status');
+    receipt.setAttribute('aria-live', 'assertive');
+    receipt.innerHTML = '<section class="hx-proof-success-card"><span class="hx-proof-success-mark"><svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#check"></use></svg></span><strong>Proof uploaded successfully</strong><p>Payment is awaiting admin verification. Opening Order History…</p></section>';
+    document.body.append(receipt);
+    window.setTimeout(() => {
+      receipt.remove();
+      const target = '/orders?proof=received';
+      if (window.hxGo) window.hxGo(target); else location.assign(target);
+    }, 1000);
+  }
+
   function renderResult(data) {
     activeData = data;
     try { sessionStorage.setItem(activeKey, JSON.stringify(data)); } catch {}
@@ -153,8 +167,7 @@
         data.status = saved.status || 'proof_submitted';
         activeData = data;
         try { sessionStorage.setItem(activeKey, JSON.stringify(data)); } catch {}
-        proofForm.remove();
-        setStatus('Your payment proof is in the administrator review queue. Do not send funds again for this request.', 'submitted');
+        showProofReceipt();
       } catch (error) {
         status.textContent = error.message || 'Proof could not be submitted. Please try again.';
         button.disabled = false;

@@ -36,5 +36,5 @@ require __DIR__ . '/_head.php';
   </div>
   <aside class="hx-panel hx-pay-method-summary"><div class="hx-pay-method-logo"><img src="<?= htmlspecialchars($payment['logo'], ENT_QUOTES, 'UTF-8') ?>" alt=""></div><p class="hx-eyebrow">SELECTED PAYMENT</p><h2><?= htmlspecialchars($payment['name'], ENT_QUOTES, 'UTF-8') ?></h2><p class="hx-muted"><?= $method === 'upi' ? 'Your wallet is credited only after the payment provider confirms the transaction.' : 'Your wallet credit stays pending until an administrator checks your transaction ID and screenshot.' ?></p><div class="hx-pay-summary-note"><svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#check"></use></svg><span>Secure session · exact amount · verified status</span></div><a class="hx-text-link" href="/add-funds"><svg class="hx-icon" aria-hidden="true"><use href="/assets/icons.svg#chevron-left"></use></svg>Change payment method</a></aside>
 </section>
-<script src="/assets/js/topup-flow.js?v=1" defer></script>
+<script src="/assets/js/topup-flow.js?v=2" defer></script>
 <?php require __DIR__ . '/_foot.php'; ?>

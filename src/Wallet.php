@@ -252,6 +252,7 @@ final class Wallet
             if (!$fresh || (string) $fresh['status'] !== 'manual_pending') {
                 throw new HttpError('Proof has already been submitted or this request was reviewed.', 409);
             }
+            Database::enforcePaymentProofUploadLimit($accountId);
             Database::reservePaymentTxid($txid, 'wallet', $orderId);
             $statement = $pdo->prepare(
                 "UPDATE store_wallet_topups SET status='proof_submitted',proof_data=?,proof_content_type=?,proof_filename=?,proof_txid=?,transaction_id=?,updated_at=? "

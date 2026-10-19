@@ -325,6 +325,21 @@ SQL);
         }
     }
 
+    public static function enforcePaymentProofUploadLimit(int $accountId, int $limit = 10, int $windowSeconds = 86400): void
+    {
+        $since = time() - max(60, $windowSeconds);
+        $row = self::row(
+            "SELECT "
+            . "(SELECT COUNT(*) FROM store_wallet_topups WHERE account_id=? AND status IN ('proof_submitted','approved','rejected') AND updated_at>=?) + "
+            . "(SELECT COUNT(*) FROM store_checkout_crypto_proofs p JOIN store_checkouts c ON c.order_id=p.order_id "
+            . "WHERE c.account_id=? AND p.status IN ('proof_submitted','approved','rejected') AND p.updated_at>=?) AS uploads",
+            [$accountId, $since, $accountId, $since]
+        );
+        if ((int) ($row['uploads'] ?? 0) >= $limit) {
+            throw new HttpError('Proof upload limit reached. You can submit up to 10 payment proofs in 24 hours. Contact shop support if a payment is still pending.', 429);
+        }
+    }
+
     public static function rows(string $sql, array $params = []): array
     {
         $statement = self::pdo()->prepare($sql);
