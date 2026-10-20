@@ -1,6 +1,14 @@
 # TODO — Website re-audit and repairs
 
-## Current purchase and proof-handling pass
+## Current smooth checkout pass
+
+- [x] Smooth scrolling and route/click transitions are enabled, with motion disabled when a visitor prefers reduced motion.
+- [x] After amount submission, the checkout URL changes into a focused gateway-style payment screen while retaining the existing server-generated QR and payment API. Each supported method shows its existing official mark: Google Pay for UPI, Binance Pay for Binance, and Tether for USDT; the UI does not claim a Razorpay, Paytm, or PhonePe integration.
+- [x] UPI provider verification runs automatically through the existing CSRF-protected status endpoint. The “Check payment status” and “Start another payment” controls are removed; status is shown in the checkout header.
+- [x] UPI wallet top-ups are restricted to ₹1–₹2,000 in both the amount form and existing API.
+- [x] Verified at 320px and 375px with mocked UPI status responses: exact amount, QR and official mark display, payment completion appears automatically, browser Back/Forward restores the amount/checkout views, the shared Wallet tab does not trigger a document reload, and the QR/payment link remain above the mobile tab bar with no horizontal overflow. Reduced-motion behavior was also checked; no real payment or fulfillment was triggered.
+
+## Previous purchase and proof-handling pass
 
 - [x] Keep existing products and product records, database tables, payment routes/payloads/success fields, CSRF rules, provider verification, and admin review contract unchanged; no new tables or migrations.
 - [x] For Binance and USDT/BEP20 crypto proofs, accept the existing transaction ID and screenshot flow, show an animated green success check only after the server accepts the proof, then open Order History with the submitted status.
@@ -9,7 +17,7 @@
 - [x] Keep the product catalog to the Buy action; make product image/title controls buttons rather than raw-link anchors and suppress native image/link callouts on long press.
 - [x] Keep the © / trust / Help / Terms footer text on Home only; preserve the existing six-tab navigation.
 - [x] Preserve UPI/Paytm provider confirmation as authoritative and include existing UPI payments in Order History. Do not treat a manually uploaded screenshot as payment confirmation or add an unsupported Paytm proof API.
-- [x] PHP/JavaScript syntax checks, existing disposable-database payment/session regressions, proof-limit boundary checks, and 320px Chromium flows for proof redirection, receipt status, gated setup access, Home-only footer, and long-press protection passed with disposable data and mocked provider confirmation.
+- [x] PHP/JavaScript syntax checks, existing disposable-database payment/session regressions, proof-limit boundary checks, and Chromium flows for proof redirection, receipt status, gated setup access, Home-only footer, and long-press protection passed with disposable data and mocked provider confirmation.
 
 ## Previous source-level fixes already present
 

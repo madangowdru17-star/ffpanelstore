@@ -129,7 +129,7 @@
         existing.classList.add('route-leaving');
         await new Promise(resolve=>setTimeout(resolve,matchMedia('(prefers-reduced-motion: reduce)').matches?0:75));
         await update();nextMain.classList.add('route-entering');
-        requestAnimationFrame(()=>nextMain.classList.remove('route-entering'));
+        requestAnimationFrame(()=>window.setTimeout(()=>nextMain.classList.remove('route-entering'),260));
       }
       if(url.hash){const target=document.getElementById(decodeURIComponent(url.hash.slice(1)));target?.scrollIntoView({behavior:'smooth',block:'start'})}
       else window.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});

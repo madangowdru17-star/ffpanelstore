@@ -24,8 +24,8 @@ final class Wallet
     public static function createTopup(int $accountId, array $body): array
     {
         $amount = self::positiveAmount($body['amount_inr'] ?? null);
-        if ($amount < 50 || $amount > 50000) {
-            throw new HttpError('Choose a top-up amount between ₹50 and ₹50,000.', 400);
+        if ($amount < 1 || $amount > 2000) {
+            throw new HttpError('Choose a top-up amount between ₹1 and ₹2,000.', 400);
         }
         $idempotencyKey = trim((string) ($body['idempotency_key'] ?? ''));
         if (!preg_match('/^[A-Za-z0-9_-]{16,64}$/', $idempotencyKey)) {

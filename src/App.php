@@ -455,8 +455,8 @@ final class App
         ob_start();
         require $file;
         $html = (string) ob_get_clean();
-        $headAssets = '<script>(function(){try{var t=localStorage.getItem("hex_shop_theme");document.documentElement.dataset.theme=(t==="dark"||t==="light")?t:"light"}catch(e){document.documentElement.dataset.theme="light"}})();</script><link rel="stylesheet" href="/assets/css/theme.css?v=13">';
-        $bodyAssets = '<script src="/assets/js/theme.js?v=8" defer></script>';
+        $headAssets = '<script>(function(){try{var t=localStorage.getItem("hex_shop_theme");document.documentElement.dataset.theme=(t==="dark"||t==="light")?t:"light"}catch(e){document.documentElement.dataset.theme="light"}})();</script><link rel="stylesheet" href="/assets/css/theme.css?v=16">';
+        $bodyAssets = '<script src="/assets/js/theme.js?v=9" defer></script>';
         if (stripos($html, '</head>') !== false) {
             $html = preg_replace('/<\/head>/i', $headAssets . '</head>', $html, 1) ?? $html;
         }
